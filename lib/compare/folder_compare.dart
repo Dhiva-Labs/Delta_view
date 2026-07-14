@@ -53,6 +53,9 @@ class CompareNode {
   bool get hasChanges => !isDirectory
       ? status != EntryStatus.identical
       : changedCount > 0;
+
+  bool get existsLeft => status != EntryStatus.onlyRight;
+  bool get existsRight => status != EntryStatus.onlyLeft;
 }
 
 class CompareRequest {
@@ -138,11 +141,17 @@ Future<CompareNode> _compareDir(
   final names = <String>{...leftEntries.keys, ...rightEntries.keys}.toList()
     ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
 
+  final leftStat = await _statOrNull(leftDir);
+  final rightStat = await _statOrNull(rightDir);
   final node = CompareNode(
     name: relative.isEmpty ? p.basename(leftDir) : p.basename(relative),
     relativePath: relative,
     isDirectory: true,
     status: EntryStatus.identical,
+    leftSize: leftStat?.size,
+    rightSize: rightStat?.size,
+    leftModified: leftStat?.modified,
+    rightModified: rightStat?.modified,
   );
 
   for (final name in names) {
@@ -198,7 +207,25 @@ Future<CompareNode> _compareDir(
   }
 
   if (node.changedCount > 0) node.status = EntryStatus.modified;
+  _sortDirsFirst(node.children);
   return node;
+}
+
+/// Meld-style ordering: directories first, then files, both A→Z.
+void _sortDirsFirst(List<CompareNode> children) {
+  children.sort((a, b) {
+    if (a.isDirectory != b.isDirectory) return a.isDirectory ? -1 : 1;
+    return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+  });
+}
+
+Future<FileStat?> _statOrNull(String path) async {
+  try {
+    final stat = await FileStat.stat(path);
+    return stat.type == FileSystemEntityType.notFound ? null : stat;
+  } on FileSystemException {
+    return null;
+  }
 }
 
 Future<Map<String, FileSystemEntity>> _listDir(String dir) async {
@@ -329,11 +356,16 @@ Future<CompareNode> _oneSidedNode(
 }) async {
   final status = left ? EntryStatus.onlyLeft : EntryStatus.onlyRight;
   if (entity is Directory) {
+    final dirStat = await _statOrNull(entity.path);
     final node = CompareNode(
       name: name,
       relativePath: relative,
       isDirectory: true,
       status: status,
+      leftSize: left ? dirStat?.size : null,
+      rightSize: left ? null : dirStat?.size,
+      leftModified: left ? dirStat?.modified : null,
+      rightModified: left ? null : dirStat?.modified,
     );
     final children = await _listDir(entity.path);
     final names = children.keys.toList()
@@ -356,6 +388,7 @@ Future<CompareNode> _oneSidedNode(
         node.onlyRightCount++;
       }
     }
+    _sortDirsFirst(node.children);
     return node;
   }
 

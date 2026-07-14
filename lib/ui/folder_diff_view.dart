@@ -241,6 +241,8 @@ class _FolderDiffViewState extends State<FolderDiffView> {
           ),
         ),
         const Divider(),
+        const _ColumnHeaders(),
+        const Divider(),
         Expanded(
           child: visible.isEmpty
               ? Center(
@@ -254,7 +256,7 @@ class _FolderDiffViewState extends State<FolderDiffView> {
                 )
               : ListView.builder(
                   itemCount: visible.length,
-                  itemExtent: 36,
+                  itemExtent: 34,
                   itemBuilder: (context, index) {
                     final (node, depth) = visible[index];
                     return _TreeRow(
@@ -277,6 +279,71 @@ class _FolderDiffViewState extends State<FolderDiffView> {
       ],
     );
   }
+}
+
+const _sizeColWidth = 62.0;
+const _timeColWidth = 116.0;
+
+class _ColumnHeaders extends StatelessWidget {
+  const _ColumnHeaders();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final style = TextStyle(
+      fontSize: 11.5,
+      fontWeight: FontWeight.w600,
+      color: scheme.onSurfaceVariant,
+    );
+    Widget pane() => Expanded(
+          child: Row(
+            children: [
+              const SizedBox(width: 12),
+              Expanded(child: Text('Name', style: style)),
+              SizedBox(
+                  width: _sizeColWidth,
+                  child: Text('Size', textAlign: TextAlign.right, style: style)),
+              SizedBox(
+                  width: _timeColWidth,
+                  child:
+                      Text('Modified', textAlign: TextAlign.right, style: style)),
+              const SizedBox(width: 14),
+            ],
+          ),
+        );
+    return SizedBox(
+      height: 26,
+      child: Row(children: [
+        pane(),
+        VerticalDivider(
+            width: 1, color: scheme.outlineVariant.withValues(alpha: 0.5)),
+        pane(),
+      ]),
+    );
+  }
+}
+
+const _months = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+String _fmtSize(int? size) {
+  if (size == null) return '';
+  if (size < 1000) return '$size B';
+  if (size < 1000 * 1000) return '${(size / 1000).toStringAsFixed(1)} kB';
+  if (size < 1000 * 1000 * 1000) {
+    return '${(size / 1e6).toStringAsFixed(1)} MB';
+  }
+  return '${(size / 1e9).toStringAsFixed(1)} GB';
+}
+
+String _fmtTime(DateTime? time) {
+  if (time == null) return '';
+  final t = time.toLocal();
+  final hh = t.hour.toString().padLeft(2, '0');
+  final mm = t.minute.toString().padLeft(2, '0');
+  return '${t.day} ${_months[t.month - 1]} ${t.year} $hh:$mm';
 }
 
 /// Prominent change summary shown at the top of the comparison result.
@@ -335,6 +402,9 @@ class _StatsHeader extends StatelessWidget {
   }
 }
 
+/// One aligned row of the Meld-style dual-pane tree: the same entry
+/// rendered for the left and right folder, with size / mtime columns.
+/// The pane where the entry doesn't exist renders as an empty slot.
 class _TreeRow extends StatelessWidget {
   const _TreeRow({
     required this.node,
@@ -355,88 +425,139 @@ class _TreeRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final color = palette.statusColor(node.status);
-    final muted = node.status == EntryStatus.identical;
-
     return InkWell(
       onTap: node.isDirectory ? onToggle : onOpen,
-      child: Padding(
-        padding: const EdgeInsets.only(left: 12, right: 16),
-        child: Row(
-          children: [
-            for (var i = 0; i < depth; i++)
-              SizedBox(
-                width: 22,
-                child: Center(
-                  child: Container(
-                    width: 1,
-                    color: scheme.outlineVariant.withValues(alpha: 0.45),
-                  ),
-                ),
-              ),
-            if (node.isDirectory)
-              AnimatedRotation(
-                turns: expanded ? 0.25 : 0,
-                duration: const Duration(milliseconds: 150),
-                child: Icon(Icons.chevron_right,
-                    size: 18, color: scheme.onSurfaceVariant),
-              )
-            else
-              const SizedBox(width: 18),
-            const SizedBox(width: 4),
-            Icon(
-              node.isDirectory
-                  ? Icons.folder_outlined
-                  : Icons.insert_drive_file_outlined,
-              size: 17,
-              color: muted ? scheme.onSurfaceVariant : color,
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                node.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 13.5,
-                  color: muted ? scheme.onSurfaceVariant : scheme.onSurface,
-                  fontWeight: muted ? FontWeight.w400 : FontWeight.w500,
-                ),
-              ),
-            ),
-            if (node.isDirectory) ...[
-              if (node.modifiedCount > 0)
-                _CountBadge(count: node.modifiedCount, color: palette.modified),
-              if (node.onlyLeftCount > 0)
-                _CountBadge(count: node.onlyLeftCount, color: palette.removed),
-              if (node.onlyRightCount > 0)
-                _CountBadge(count: node.onlyRightCount, color: palette.added),
-            ] else ...[
-              if (node.status == EntryStatus.modified &&
-                  (node.addedLines ?? 0) + (node.removedLines ?? 0) > 0) ...[
-                if (node.addedLines! > 0)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: Text('+${node.addedLines}',
-                        style: monoStyle.copyWith(
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w700,
-                            color: palette.added)),
-                  ),
-                if (node.removedLines! > 0)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: Text('−${node.removedLines}',
-                        style: monoStyle.copyWith(
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w700,
-                            color: palette.removed)),
-                  ),
-              ],
-              _StatusLabel(status: node.status, palette: palette),
-            ],
-          ],
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(child: _pane(context, left: true)),
+          VerticalDivider(
+              width: 1, color: scheme.outlineVariant.withValues(alpha: 0.5)),
+          Expanded(child: _pane(context, left: false)),
+        ],
+      ),
+    );
+  }
+
+  Widget _pane(BuildContext context, {required bool left}) {
+    final scheme = Theme.of(context).colorScheme;
+    final exists = left ? node.existsLeft : node.existsRight;
+
+    if (!exists) {
+      return Container(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.25),
+        padding: EdgeInsets.only(left: 34.0 + depth * 22),
+        alignment: Alignment.centerLeft,
+        child: Text(
+          '— missing —',
+          style: TextStyle(
+            fontSize: 11.5,
+            fontStyle: FontStyle.italic,
+            color: scheme.onSurfaceVariant.withValues(alpha: 0.45),
+          ),
         ),
+      );
+    }
+
+    final color = switch (node.status) {
+      EntryStatus.identical => scheme.onSurface,
+      EntryStatus.modified => palette.modified,
+      EntryStatus.onlyLeft => palette.removed,
+      EntryStatus.onlyRight => palette.added,
+    };
+    final muted = node.status == EntryStatus.identical;
+    final size = left ? node.leftSize : node.rightSize;
+    final time = left ? node.leftModified : node.rightModified;
+    final metaStyle = TextStyle(
+        fontSize: 11.5,
+        color: scheme.onSurfaceVariant.withValues(alpha: muted ? 0.75 : 1));
+
+    return Padding(
+      padding: const EdgeInsets.only(left: 12, right: 14),
+      child: Row(
+        children: [
+          for (var i = 0; i < depth; i++)
+            SizedBox(
+              width: 22,
+              child: Center(
+                child: Container(
+                  width: 1,
+                  color: scheme.outlineVariant.withValues(alpha: 0.45),
+                ),
+              ),
+            ),
+          if (node.isDirectory)
+            AnimatedRotation(
+              turns: expanded ? 0.25 : 0,
+              duration: const Duration(milliseconds: 150),
+              child: Icon(Icons.chevron_right,
+                  size: 18, color: scheme.onSurfaceVariant),
+            )
+          else
+            const SizedBox(width: 18),
+          const SizedBox(width: 4),
+          Icon(
+            node.isDirectory
+                ? Icons.folder_outlined
+                : Icons.insert_drive_file_outlined,
+            size: 16,
+            color: muted ? scheme.onSurfaceVariant : color,
+          ),
+          const SizedBox(width: 7),
+          Flexible(
+            child: Text(
+              node.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 13,
+                color: muted ? scheme.onSurfaceVariant : color,
+                fontWeight: muted ? FontWeight.w400 : FontWeight.w600,
+              ),
+            ),
+          ),
+          if (node.isDirectory && left) ...[
+            if (node.modifiedCount > 0)
+              _CountBadge(count: node.modifiedCount, color: palette.modified),
+            if (node.onlyLeftCount > 0)
+              _CountBadge(count: node.onlyLeftCount, color: palette.removed),
+            if (node.onlyRightCount > 0)
+              _CountBadge(count: node.onlyRightCount, color: palette.added),
+          ],
+          if (!node.isDirectory &&
+              node.status == EntryStatus.modified &&
+              !left) ...[
+            if ((node.addedLines ?? 0) > 0)
+              Padding(
+                padding: const EdgeInsets.only(left: 8),
+                child: Text('+${node.addedLines}',
+                    style: monoStyle.copyWith(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: palette.added)),
+              ),
+            if ((node.removedLines ?? 0) > 0)
+              Padding(
+                padding: const EdgeInsets.only(left: 8),
+                child: Text('−${node.removedLines}',
+                    style: monoStyle.copyWith(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: palette.removed)),
+              ),
+          ],
+          const Spacer(),
+          SizedBox(
+            width: _sizeColWidth,
+            child: Text(_fmtSize(size),
+                textAlign: TextAlign.right, style: metaStyle),
+          ),
+          SizedBox(
+            width: _timeColWidth,
+            child: Text(_fmtTime(time),
+                textAlign: TextAlign.right, style: metaStyle),
+          ),
+        ],
       ),
     );
   }
@@ -461,26 +582,6 @@ class _CountBadge extends StatelessWidget {
           style: TextStyle(
               fontSize: 11, fontWeight: FontWeight.w600, color: color)),
     );
-  }
-}
-
-class _StatusLabel extends StatelessWidget {
-  const _StatusLabel({required this.status, required this.palette});
-
-  final EntryStatus status;
-  final DiffPalette palette;
-
-  @override
-  Widget build(BuildContext context) {
-    final (label, color) = switch (status) {
-      EntryStatus.identical => ('same', Theme.of(context).colorScheme.outline),
-      EntryStatus.modified => ('modified', palette.modified),
-      EntryStatus.onlyLeft => ('left only', palette.removed),
-      EntryStatus.onlyRight => ('right only', palette.added),
-    };
-    return Text(label,
-        style: TextStyle(
-            fontSize: 11.5, color: color, fontWeight: FontWeight.w600));
   }
 }
 
