@@ -5,12 +5,12 @@
 #
 # The package architecture comes from the machine this runs on (amd64 or
 # arm64), because Flutter builds for the host. The output is
-# dist/delta-view_<version>_<arch>.deb. The package version is 1.0.0, the one
-# the published amd64 package carries; override it with DEB_VERSION.
+# dist/delta-view_<version>_<arch>.deb. The package version is the one in
+# pubspec.yaml (without the build number); override it with DEB_VERSION.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="${DEB_VERSION:-1.0.0}"
+VERSION="${DEB_VERSION:-$(grep '^version:' "$ROOT/pubspec.yaml" | awk '{print $2}' | cut -d+ -f1)}"
 PKGNAME="delta-view"
 
 ARCH="$(dpkg --print-architecture)"
