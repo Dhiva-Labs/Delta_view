@@ -29,9 +29,6 @@ concurrency:
 
 env:
   FLUTTER_VERSION: '3.44.6'
-  # Version of the .deb packages. The published amd64 package is 1.0.0, so the
-  # arm64 one carries the same number.
-  DEB_VERSION: '1.0.0'
 
 jobs:
   linux:
@@ -113,7 +110,8 @@ jobs:
 
       - name: Check the .deb
         run: |
-          DEB="dist/delta-view_${DEB_VERSION}_${{ matrix.deb_arch }}.deb"
+          VERSION="$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)"
+          DEB="dist/delta-view_${VERSION}_${{ matrix.deb_arch }}.deb"
           ls -l dist
           [ "$(ls dist | wc -l)" -eq 1 ]
           dpkg-deb --info "$DEB"
@@ -337,7 +335,7 @@ jobs:
         run: |
           VERSION="$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)"
           FILES=""
-          for arch in amd64 arm64; do FILES="$FILES assets/delta-view_${DEB_VERSION}_${arch}.deb"; done
+          for arch in amd64 arm64; do FILES="$FILES assets/delta-view_${VERSION}_${arch}.deb"; done
           for arch in x64 arm64; do FILES="$FILES assets/DeltaView-${VERSION}-windows-${arch}-setup.exe"; done
           ls -l assets
           ls -l $FILES

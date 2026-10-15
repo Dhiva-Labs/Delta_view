@@ -1,7 +1,7 @@
 ; Inno Setup script for the DeltaView installer.
 ;
 ;   ISCC /DArch=x64 packaging\windows\DeltaView.iss
-;   ISCC /DArch=arm64 /DAppVersion=0.1.0 packaging\windows\DeltaView.iss
+;   ISCC /DArch=arm64 /DAppVersion=1.0.1 packaging\windows\DeltaView.iss
 ;
 ; Arch picks the Flutter build to package (build\windows\<Arch>\runner\Release)
 ; and the architecture the installer accepts. The output is
@@ -11,7 +11,7 @@
   #error Pass /DArch=x64 or /DArch=arm64
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #define AppVersion "1.0.1"
 #endif
 
 #define AppName "DeltaView"
