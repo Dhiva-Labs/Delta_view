@@ -1,0 +1,363 @@
+name: Desktop builds
+
+# Linux and Windows, x64 and arm64, built natively on a runner of each
+# architecture. Every leg runs the tests, checks the machine type of every
+# binary in the bundle, builds the .deb / Windows installer, installs it and
+# starts the installed app once.
+# A published release gets the packages attached; names that are already on
+# the release (hand-uploaded files) are left alone.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to attach the packages to (leave empty to only build)
+        required: false
+        default: ''
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FLUTTER_VERSION: '3.44.6'
+  # Version of the .deb packages. The published amd64 package is 1.0.0, so the
+  # arm64 one carries the same number.
+  DEB_VERSION: '1.0.0'
+
+jobs:
+  linux:
+    name: Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            deb_arch: amd64
+            runner: ubuntu-24.04
+            elf_machine: x86-64
+          - arch: arm64
+            deb_arch: arm64
+            runner: ubuntu-24.04-arm
+            elf_machine: ARM aarch64
+    env:
+      BUNDLE: build/linux/${{ matrix.arch }}/release/bundle
+      ELF_MACHINE: ${{ matrix.elf_machine }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # xvfb, xauth, xdotool, dbus-x11: the smoke run of the installed .deb.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev libstdc++-12-dev \
+            file xvfb xauth xdotool dbus-x11
+
+      - name: Install Flutter ${{ env.FLUTTER_VERSION }}
+        run: |
+          git clone --depth 1 --branch "$FLUTTER_VERSION" \
+            https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+
+      - name: Configure Flutter
+        run: |
+          uname -m
+          flutter config --no-analytics --enable-linux-desktop
+          flutter precache --linux
+          flutter --version
+          dart --version
+
+      - name: Get packages
+        run: flutter pub get
+
+      - name: Test
+        run: flutter test
+
+      - name: Build release
+        run: flutter build linux --release
+
+      - name: Assert every ELF file in the bundle is ${{ matrix.elf_machine }}
+        run: |
+          for f in delta_view lib/libapp.so lib/libflutter_linux_gtk.so lib/libfile_selector_linux_plugin.so; do
+            [ -f "$BUNDLE/$f" ] || { echo "::error::missing $BUNDLE/$f"; exit 1; }
+          done
+          checked=0
+          bad=0
+          while IFS= read -r -d '' f; do
+            desc="$(file -b "$f")"
+            case "$desc" in ELF*) ;; *) continue ;; esac
+            echo "$f: $desc"
+            checked=$((checked + 1))
+            case "$desc" in
+              *"$ELF_MACHINE"*) ;;
+              *) echo "::error file=$f::not $ELF_MACHINE"; bad=1 ;;
+            esac
+          done < <(find "$BUNDLE" -type f -print0)
+          echo "checked $checked ELF files"
+          [ "$checked" -ge 4 ] && [ "$bad" -eq 0 ]
+
+      - name: Package .deb
+        run: OUT_DIR=dist packaging/make_deb.sh
+
+      - name: Check the .deb
+        run: |
+          DEB="dist/delta-view_${DEB_VERSION}_${{ matrix.deb_arch }}.deb"
+          ls -l dist
+          [ "$(ls dist | wc -l)" -eq 1 ]
+          dpkg-deb --info "$DEB"
+          [ "$(dpkg-deb --field "$DEB" Architecture)" = "${{ matrix.deb_arch }}" ]
+          sudo apt-get install -y "./$DEB"
+          for f in delta_view lib/libapp.so lib/libflutter_linux_gtk.so; do
+            file "/opt/delta_view/$f" | tee /dev/stderr | grep "$ELF_MACHINE"
+          done
+
+      # Starts the installed package. The window is only shown after Flutter
+      # renders its first frame, which needs the AOT snapshot (libapp.so) to
+      # have been loaded and run.
+      - name: Smoke-run the installed app (Xvfb)
+        timeout-minutes: 5
+        run: |
+          cat > "$RUNNER_TEMP/smoke.sh" <<'EOF'
+          log="$RUNNER_TEMP/smoke.log"
+          delta-view > "$log" 2>&1 &
+          pid=$!
+          for i in $(seq 1 90); do
+            if xdotool search --name 'delta_view' > /dev/null 2>&1 \
+               && grep -q 'libapp.so' "/proc/$pid/maps"; then
+              echo "delta_view is up after ${i}s: window shown, AOT snapshot mapped:"
+              grep 'libapp.so' "/proc/$pid/maps" | head -1
+              sleep 5
+              kill -0 "$pid" || { echo "delta_view died after showing its window"; cat "$log"; exit 1; }
+              kill "$pid"
+              cat "$log"
+              exit 0
+            fi
+            kill -0 "$pid" 2> /dev/null || { echo "delta_view exited early"; cat "$log"; exit 1; }
+            sleep 1
+          done
+          echo "delta_view did not come up in 90s"
+          cat "$log"
+          exit 1
+          EOF
+          xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- bash "$RUNNER_TEMP/smoke.sh"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/*.deb
+          if-no-files-found: error
+
+  windows:
+    name: Windows ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            pe_machine: '0x8664'
+            elf_machine: '0x3E'
+          - arch: arm64
+            runner: windows-11-arm
+            pe_machine: '0xAA64'
+            elf_machine: '0xB7'
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      ARCH: ${{ matrix.arch }}
+      RELEASE_DIR: build\windows\${{ matrix.arch }}\runner\Release
+      # PE COFF machine of every .exe/.dll, and ELF e_machine of the AOT
+      # snapshot (data\app.so is an ELF file on Windows too).
+      PE_MACHINE: ${{ matrix.pe_machine }}
+      ELF_MACHINE: ${{ matrix.elf_machine }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # On an ARM64 host (PROCESSOR_ARCHITECTURE=ARM64) the bootstrap fetches
+      # the arm64 Dart SDK and `flutter build windows` targets windows-arm64.
+      - name: Install Flutter ${{ env.FLUTTER_VERSION }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          git clone --depth 1 --branch $env:FLUTTER_VERSION `
+            https://github.com/flutter/flutter.git "$env:RUNNER_TEMP\flutter"
+          Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\flutter\bin"
+
+      - name: Configure Flutter
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          "PROCESSOR_ARCHITECTURE=$env:PROCESSOR_ARCHITECTURE"
+          flutter config --no-analytics --enable-windows-desktop
+          flutter precache --windows
+          flutter --version
+          dart --version
+
+      - name: Get packages
+        run: flutter pub get
+
+      - name: Test
+        run: flutter test
+
+      - name: Build release
+        run: flutter build windows --release
+
+      - name: Assert every PE file is ${{ matrix.pe_machine }}
+        run: |
+          function Get-PeMachine([string]$Path) {
+            $fs = [IO.File]::OpenRead($Path)
+            try {
+              $br = New-Object IO.BinaryReader($fs)
+              $fs.Position = 0x3C
+              $fs.Position = $br.ReadInt32()
+              if ($br.ReadUInt32() -ne 0x4550) { throw "$Path is not a PE file" }
+              return $br.ReadUInt16()
+            } finally { $fs.Dispose() }
+          }
+          $expected = [Convert]::ToUInt16($env:PE_MACHINE, 16)
+          $files = Get-ChildItem -Path $env:RELEASE_DIR -Recurse -File -Include *.exe, *.dll
+          foreach ($required in 'delta_view.exe', 'flutter_windows.dll', 'file_selector_windows_plugin.dll') {
+            if (-not ($files.Name -contains $required)) { throw "$required missing from $env:RELEASE_DIR" }
+          }
+          $bad = 0
+          foreach ($f in $files) {
+            $m = Get-PeMachine $f.FullName
+            '{0,-50} 0x{1:X4}' -f $f.Name, $m
+            if ($m -ne $expected) { Write-Host "::error file=$($f.FullName)::machine 0x$('{0:X4}' -f $m), expected $env:PE_MACHINE"; $bad++ }
+          }
+          $bytes = [IO.File]::ReadAllBytes("$env:RELEASE_DIR\data\app.so")
+          $elf = [BitConverter]::ToUInt16($bytes, 0x12)
+          'data\app.so ELF e_machine 0x{0:X2}' -f $elf
+          if ($elf -ne [Convert]::ToUInt16($env:ELF_MACHINE, 16)) { Write-Host "::error::app.so is not $env:ELF_MACHINE"; $bad++ }
+          "checked $($files.Count) PE files and app.so"
+          if ($bad) { exit 1 }
+
+      - name: Build the installer
+        run: |
+          Get-Command ISCC.exe -ErrorAction SilentlyContinue | Format-List Source, Version
+          ./packaging/windows/build_installer.ps1
+
+      # Installs the setup silently into a temporary folder, checks what it
+      # installed, starts the installed app with a window, then uninstalls.
+      - name: Install, smoke-run and uninstall
+        timeout-minutes: 10
+        run: |
+          function Get-PeMachine([string]$Path) {
+            $fs = [IO.File]::OpenRead($Path)
+            try {
+              $br = New-Object IO.BinaryReader($fs)
+              $fs.Position = 0x3C
+              $fs.Position = $br.ReadInt32()
+              if ($br.ReadUInt32() -ne 0x4550) { throw "$Path is not a PE file" }
+              return $br.ReadUInt16()
+            } finally { $fs.Dispose() }
+          }
+          Get-ChildItem dist | Format-Table Name, Length
+          $setups = @(Get-ChildItem dist)
+          if ($setups.Count -ne 1) { throw 'expected exactly one setup in dist' }
+          if ($setups[0].Name -notlike "DeltaView-*-windows-$env:ARCH-setup.exe") { throw "unexpected setup name $($setups[0].Name)" }
+          $installDir = Join-Path $env:RUNNER_TEMP 'DeltaView'
+          $log = Join-Path $env:RUNNER_TEMP 'setup.log'
+          $setup = Start-Process -FilePath $setups[0].FullName -Wait -PassThru -ArgumentList `
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', "/DIR=$installDir", "/LOG=$log"
+          if ($setup.ExitCode -ne 0) { Get-Content $log; throw "setup exited with code $($setup.ExitCode)" }
+          $exe = Join-Path $installDir 'delta_view.exe'
+          if (-not (Test-Path $exe)) { Get-Content $log; throw "$exe was not installed" }
+          $m = Get-PeMachine $exe
+          'installed delta_view.exe machine 0x{0:X4}' -f $m
+          if ($m -ne [Convert]::ToUInt16($env:PE_MACHINE, 16)) { throw 'installed exe has the wrong architecture' }
+
+          $p = Start-Process -FilePath $exe -PassThru
+          $up = $false
+          for ($i = 1; $i -le 90; $i++) {
+            Start-Sleep -Seconds 1
+            $p.Refresh()
+            if ($p.HasExited) { throw "delta_view.exe exited early with code $($p.ExitCode)" }
+            if ($p.MainWindowHandle -ne 0) {
+              "window '$($p.MainWindowTitle)' is up after ${i}s"
+              $up = $true
+              break
+            }
+          }
+          if (-not $up) {
+            Stop-Process -Id $p.Id -Force
+            throw 'delta_view.exe showed no window within 90 s'
+          }
+          Start-Sleep -Seconds 5
+          $p.Refresh()
+          if ($p.HasExited) { throw "delta_view.exe died after showing its window (code $($p.ExitCode))" }
+          Stop-Process -Id $p.Id -Force
+
+          $uninstall = Start-Process -FilePath (Join-Path $installDir 'unins000.exe') -Wait -PassThru -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+          if ($uninstall.ExitCode -ne 0) { throw "uninstaller exited with code $($uninstall.ExitCode)" }
+          Start-Sleep -Seconds 3
+          if (Test-Path $exe) { throw 'delta_view.exe is still there after uninstalling' }
+          'uninstalled'
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-${{ matrix.arch }}
+          path: dist/*.exe
+          if-no-files-found: error
+
+  release:
+    name: Release assets
+    needs: [linux, windows]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: pubspec.yaml
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: '*-*'
+          path: assets
+          merge-multiple: true
+
+      - name: Select the release assets
+        id: select
+        run: |
+          VERSION="$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)"
+          FILES=""
+          for arch in amd64 arm64; do FILES="$FILES assets/delta-view_${DEB_VERSION}_${arch}.deb"; done
+          for arch in x64 arm64; do FILES="$FILES assets/DeltaView-${VERSION}-windows-${arch}-setup.exe"; done
+          ls -l assets
+          ls -l $FILES
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
+
+      # Names already on the release (the hand-built amd64 .deb and x64
+      # installer) are kept as they are.
+      - name: Upload to release ${{ github.event.release.tag_name || inputs.release_tag }}
+        if: github.event_name == 'release' || inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+          FILES: ${{ steps.select.outputs.files }}
+        run: |
+          existing="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          for f in $FILES; do
+            name="$(basename "$f")"
+            if grep -qxF "$name" <<< "$existing"; then
+              echo "skip $name (already on release $TAG)"
+            else
+              gh release upload "$TAG" "$f" --repo "$GITHUB_REPOSITORY"
+            fi
+          done
