@@ -1,5 +1,9 @@
 # DeltaView
 
+[![ARM64 builds](https://github.com/Dhiva-Labs/Delta_view/actions/workflows/desktop.yml/badge.svg?branch=main)](https://github.com/Dhiva-Labs/Delta_view/actions/workflows/desktop.yml)
+![Linux x64 | arm64](https://img.shields.io/badge/Linux-x64%20%7C%20arm64-informational?logo=linux&logoColor=white)
+![Windows x64 | arm64](https://img.shields.io/badge/Windows-x64%20%7C%20arm64-informational?logo=windows&logoColor=white)
+
 A fast, modern folder and file comparison tool — Meld-style, built with
 Flutter for **Windows, Ubuntu, and macOS**.
 
@@ -17,6 +21,25 @@ Flutter for **Windows, Ubuntu, and macOS**.
 - Binary files and files over 8 MB are detected and reported instead of
   producing a garbage diff.
 
+## Install
+
+Every release carries the Linux and Windows builds for x64 and arm64:
+
+| Platform | Architecture | Asset |
+|---|---|---|
+| Linux (Debian, Ubuntu) | x64 | `delta-view_1.0.0_amd64.deb` |
+| Linux (Debian, Ubuntu) | arm64 | `delta-view_1.0.0_arm64.deb` |
+| Windows | x64 | `DeltaView-<version>-windows-x64-setup.exe` |
+| Windows | arm64 | `DeltaView-<version>-windows-arm64-setup.exe` |
+
+```sh
+sudo apt install ./delta-view_1.0.0_arm64.deb   # or _amd64.deb
+```
+
+The [Desktop builds](.github/workflows/desktop.yml) workflow builds, tests,
+installs and starts the packages on Linux and Windows, x64 and arm64, on every
+push.
+
 ## Run
 
 ```sh
@@ -29,7 +52,13 @@ flutter run -d linux    # or -d windows / -d macos
 flutter build linux     # or windows / macos
 ```
 
-The Linux bundle lands in `build/linux/x64/release/bundle/`.
+The Linux bundle lands in `build/linux/<x64|arm64>/release/bundle/` (Flutter
+builds for the machine it runs on). To package a build:
+
+```sh
+packaging/make_deb.sh                                 # Linux .deb for this machine's architecture
+pwsh packaging/windows/build_installer.ps1            # Windows installer (needs Inno Setup 6)
+```
 
 ## Test
 
