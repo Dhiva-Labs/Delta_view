@@ -26,3 +26,6 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    # The Linux runner sets this as the window icon.
+    - assets/brand/delta_view_256.png
