@@ -129,12 +129,14 @@ void main() {
     );
   });
 
-  test('sources that are not available yet fail gently', () async {
+  test('a remote side without credentials fails with a sign-in message',
+      () async {
     await expectLater(
       compareFolders(LocalSource(left),
           const SftpSource(host: 'h', username: 'u', path: '/srv')),
       throwsA(isA<ScanFailure>()
-          .having((f) => f.unsupported, 'unsupported', isTrue)),
+          .having((f) => f.unsupported, 'unsupported', isFalse)
+          .having((f) => '$f', 'message', contains('Sign in to u@h'))),
     );
   });
 
