@@ -2,14 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../compare/comparison.dart';
 import '../compare/folder_compare.dart';
 import '../compare/folder_format.dart';
-import '../compare/folder_report.dart';
 import '../compare/folder_sync.dart';
 import '../compare/folder_watch.dart';
 import '../compare/ignore_rules.dart';
@@ -17,8 +15,10 @@ import '../compare/sources/file_source.dart';
 import '../settings/app_settings.dart';
 import '../theme.dart';
 import 'folder/entry_actions.dart';
+import 'folder/entry_menu.dart';
 import 'folder/folder_header.dart';
 import 'folder/ignore_dialog.dart';
+import 'folder/report_export.dart';
 import 'folder/sync_dialog.dart';
 import 'folder/tree_model.dart';
 import 'folder/tree_rows.dart';
@@ -745,84 +745,20 @@ class _FolderDiffViewState extends State<FolderDiffView> {
     _startScan();
   }
 
-  void _showIssues(ScanResult result) {
-    showDialog<void>(
-      context: context,
-      builder: (context) {
-        final scheme = Theme.of(context).colorScheme;
-        return AlertDialog(
-          icon: Icon(Icons.warning_amber_rounded,
-              color: DiffPalette.of(context).modified),
-          title: Text('${result.issues.length} '
-              '${result.issues.length == 1 ? 'entry' : 'entries'} '
-              'could not be read'),
-          content: SizedBox(
-            width: 560,
-            child: ListView(
-              shrinkWrap: true,
-              children: [
-                for (final issue in result.issues)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: Text.rich(TextSpan(children: [
-                      TextSpan(
-                          text: issue.path,
-                          style: monoStyle.copyWith(fontSize: 12)),
-                      TextSpan(
-                          text: '  ${issue.message}',
-                          style: TextStyle(
-                              fontSize: 12.5, color: scheme.onSurfaceVariant)),
-                    ])),
-                  ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
   // ---- reports ----
 
   Future<void> _export({required bool html}) async {
     final result = _result;
     if (result == null) return;
-    final extension = html ? 'html' : 'csv';
-    String safe(String s) => s.replaceAll(RegExp(r'[^\w.\-]+'), '_');
-    final location = await getSaveLocation(
-      suggestedName: '${safe(widget.left.label)}-vs-'
-          '${safe(widget.right.label)}.$extension',
-      acceptedTypeGroups: [
-        html
-            ? const XTypeGroup(label: 'HTML page', extensions: ['html', 'htm'])
-            : const XTypeGroup(label: 'CSV', extensions: ['csv']),
-      ],
-    );
-    if (location == null) return;
-    var path = location.path;
-    if (!path.toLowerCase().endsWith('.$extension') &&
-        !(html && path.toLowerCase().endsWith('.htm'))) {
-      path = '$path.$extension';
-    }
-    final query = _tree.query;
-    final report = FolderReport(
-      result: result,
-      leftDescription: widget.left.description,
-      rightDescription: widget.right.description,
-      include: _tree.isShown,
-      scopeLabel: query.isEmpty
-          ? _tree.filter.label
-          : '${_tree.filter.label}, names containing “$query”',
-    );
     try {
-      await File(path).writeAsString(html ? report.toHtml() : report.toCsv());
-      _snack('Saved the report to $path');
+      final path = await saveFolderReport(
+        result: result,
+        left: widget.left,
+        right: widget.right,
+        tree: _tree,
+        html: html,
+      );
+      if (path != null) _snack('Saved the report to $path');
     } on FileSystemException catch (e) {
       _snack('Could not save the report: ${e.osError?.message ?? e.message}');
     }
@@ -1140,7 +1076,7 @@ class _FolderDiffViewState extends State<FolderDiffView> {
                   label: Text(
                       '${formatCount(result.issues.length)} unreadable'),
                   visualDensity: VisualDensity.compact,
-                  onPressed: () => _showIssues(result),
+                  onPressed: () => showScanIssues(context, result),
                 ),
               ],
               const SizedBox(width: 10),
@@ -1306,98 +1242,19 @@ class _FolderDiffViewState extends State<FolderDiffView> {
 
   /// The actions for the selected entries, for the context menu and the
   /// toolbar's menu button.
-  List<Widget> _entryMenu(ScanResult result) {
-    final targets = _targets;
-    final single = targets.length == 1 ? targets.single : null;
-    final idle = !_busy;
-    bool canCopy(Side from) =>
-        idle &&
-        result.writable(from.other) &&
-        targets.any((n) => n.existsOn(from) && n.hasChanges);
-    bool canDelete(Side side) =>
-        idle &&
-        result.writable(side) &&
-        targets.any((n) => n.existsOn(side) && n.relativePath.isNotEmpty);
-    final many = targets.length > 1 ? ' (${formatCount(targets.length)})' : '';
-
-    List<Widget> sideMenu(Side side) {
-      final node = single != null && single.existsOn(side) ? single : null;
-      return [
-        MenuItemButton(
-          leadingIcon: const Icon(Icons.content_copy, size: 18),
-          onPressed: node == null ? null : () => _copyPath(side, node),
-          child: const Text('Copy path'),
+  List<Widget> _entryMenu(ScanResult result) => buildEntryMenu(
+        targets: _targets,
+        result: result,
+        busy: _busy,
+        hasExternalEditor: appSettings.externalEditor.trim().isNotEmpty,
+        actions: EntryMenuActions(
+          open: _openComparison,
+          copy: _copy,
+          delete: _delete,
+          copyPath: _copyPath,
+          showInFileManager: _showInFileManager,
+          openInEditor: _openInEditor,
+          ignore: _ignoreTargets,
         ),
-        // Only offered where the side has paths on this machine.
-        if (result.isLocal(side)) ...[
-          MenuItemButton(
-            leadingIcon: const Icon(Icons.folder_open_outlined, size: 18),
-            onPressed:
-                node == null ? null : () => _showInFileManager(side, node),
-            child: const Text('Show in file manager'),
-          ),
-          MenuItemButton(
-            leadingIcon: const Icon(Icons.edit_note, size: 18),
-            onPressed: node == null ? null : () => _openInEditor(side, node),
-            child: Text(appSettings.externalEditor.trim().isEmpty
-                ? 'Open with default app'
-                : 'Open in external editor'),
-          ),
-        ],
-      ];
-    }
-
-    return [
-      MenuItemButton(
-        leadingIcon: const Icon(Icons.open_in_new, size: 18),
-        shortcut: AppAction.openEntry.activator,
-        onPressed: single == null ? null : () => _openComparison(single),
-        child: Text(single?.isDirectory == true
-            ? 'Open folder comparison'
-            : 'Open comparison'),
-      ),
-      const Divider(height: 8),
-      MenuItemButton(
-        leadingIcon: const Icon(Icons.arrow_forward, size: 18),
-        onPressed: canCopy(Side.left) ? () => _copy(Side.left) : null,
-        child: Text('Copy to right$many'),
-      ),
-      MenuItemButton(
-        leadingIcon: const Icon(Icons.arrow_back, size: 18),
-        onPressed: canCopy(Side.right) ? () => _copy(Side.right) : null,
-        child: Text('Copy to left$many'),
-      ),
-      MenuItemButton(
-        leadingIcon: const Icon(Icons.delete_outline, size: 18),
-        onPressed: canDelete(Side.left) ? () => _delete(Side.left) : null,
-        child: Text('Delete on left$many…'),
-      ),
-      MenuItemButton(
-        leadingIcon: const Icon(Icons.delete_outline, size: 18),
-        onPressed: canDelete(Side.right) ? () => _delete(Side.right) : null,
-        child: Text('Delete on right$many…'),
-      ),
-      const Divider(height: 8),
-      SubmenuButton(
-        leadingIcon: const Icon(Icons.west, size: 18),
-        menuChildren: sideMenu(Side.left),
-        child: const Text('Left side'),
-      ),
-      SubmenuButton(
-        leadingIcon: const Icon(Icons.east, size: 18),
-        menuChildren: sideMenu(Side.right),
-        child: const Text('Right side'),
-      ),
-      const Divider(height: 8),
-      MenuItemButton(
-        leadingIcon: const Icon(Icons.visibility_off_outlined, size: 18),
-        onPressed: targets.any((n) => n.relativePath.isNotEmpty)
-            ? _ignoreTargets
-            : null,
-        child: Text(single != null
-            ? 'Ignore “${single.name}” in this comparison'
-            : 'Ignore$many in this comparison'),
-      ),
-    ];
-  }
+      );
 }
