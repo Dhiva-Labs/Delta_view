@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- DeltaView, concept 1 "Split Delta".
+       Two panes share one Δ; the Δ swaps colour where it crosses the seam. -->
+  <defs>
+    <linearGradient id="indigo" gradientUnits="userSpaceOnUse" x1="100" y1="100" x2="100" y2="924">
+      <stop offset="0" stop-color="#6366F1"/>
+      <stop offset="1" stop-color="#4F46E5"/>
+    </linearGradient>
+    <linearGradient id="pale" gradientUnits="userSpaceOnUse" x1="100" y1="100" x2="100" y2="924">
+      <stop offset="0" stop-color="#E0E7FF"/>
+      <stop offset="1" stop-color="#C7D2FE"/>
+    </linearGradient>
+    <clipPath id="body"><rect x="100" y="100" width="824" height="824" rx="184"/></clipPath>
+    <clipPath id="left-pane"><rect x="0" y="0" width="512" height="1024"/></clipPath>
+    <clipPath id="right-pane"><rect x="512" y="0" width="512" height="1024"/></clipPath>
+  </defs>
+  <g clip-path="url(#body)">
+    <rect x="100" y="100" width="412" height="824" fill="url(#indigo)"/>
+    <rect x="512" y="100" width="412" height="824" fill="url(#pale)"/>
+    <!-- Δ: apex (512,224), base y=768, width 624 -->
+    <g clip-path="url(#left-pane)">
+      <polygon points="512,224 824,768 200,768" fill="url(#pale)"/>
+    </g>
+    <g clip-path="url(#right-pane)">
+      <polygon points="512,224 824,768 200,768" fill="url(#indigo)"/>
+    </g>
+  </g>
+</svg>
