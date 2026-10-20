@@ -319,55 +319,66 @@ class FolderTreeRow extends StatelessWidget {
             color: color,
           ),
           const SizedBox(width: 7),
-          Flexible(
-            child: Text(
-              node.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 13,
-                color: color,
-                fontWeight: muted ? FontWeight.w400 : FontWeight.w600,
-              ),
+          // Name and badges share what is left; the size and date columns
+          // keep fixed widths so they line up from row to row.
+          Expanded(
+            child: Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    node.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: color,
+                      fontWeight: muted ? FontWeight.w400 : FontWeight.w600,
+                    ),
+                  ),
+                ),
+                if (node.isDirectory && left) ...[
+                  if (node.modifiedCount > 0)
+                    _CountBadge(
+                        count: node.modifiedCount, color: palette.modified),
+                  if (node.onlyLeftCount > 0)
+                    _CountBadge(
+                        count: node.onlyLeftCount, color: palette.removed),
+                  if (node.onlyRightCount > 0)
+                    _CountBadge(
+                        count: node.onlyRightCount, color: palette.added),
+                ],
+                if (node.isTypeConflict)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 8),
+                    child: Text(isFolder ? 'folder' : 'file',
+                        style: metaStyle.copyWith(
+                            fontStyle: FontStyle.italic)),
+                  ),
+                if (!node.isDirectory &&
+                    node.status == EntryStatus.modified &&
+                    !left) ...[
+                  if ((node.addedLines ?? 0) > 0)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 8),
+                      child: Text('+${node.addedLines}',
+                          style: monoStyle.copyWith(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: palette.added)),
+                    ),
+                  if ((node.removedLines ?? 0) > 0)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 8),
+                      child: Text('−${node.removedLines}',
+                          style: monoStyle.copyWith(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: palette.removed)),
+                    ),
+                ],
+              ],
             ),
           ),
-          if (node.isDirectory && left) ...[
-            if (node.modifiedCount > 0)
-              _CountBadge(count: node.modifiedCount, color: palette.modified),
-            if (node.onlyLeftCount > 0)
-              _CountBadge(count: node.onlyLeftCount, color: palette.removed),
-            if (node.onlyRightCount > 0)
-              _CountBadge(count: node.onlyRightCount, color: palette.added),
-          ],
-          if (node.isTypeConflict)
-            Padding(
-              padding: const EdgeInsets.only(left: 8),
-              child: Text(isFolder ? 'folder' : 'file',
-                  style: metaStyle.copyWith(fontStyle: FontStyle.italic)),
-            ),
-          if (!node.isDirectory &&
-              node.status == EntryStatus.modified &&
-              !left) ...[
-            if ((node.addedLines ?? 0) > 0)
-              Padding(
-                padding: const EdgeInsets.only(left: 8),
-                child: Text('+${node.addedLines}',
-                    style: monoStyle.copyWith(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: palette.added)),
-              ),
-            if ((node.removedLines ?? 0) > 0)
-              Padding(
-                padding: const EdgeInsets.only(left: 8),
-                child: Text('−${node.removedLines}',
-                    style: monoStyle.copyWith(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: palette.removed)),
-              ),
-          ],
-          const Spacer(),
           SizedBox(
             width: sizeColWidth,
             child: Text(formatSize(size),
