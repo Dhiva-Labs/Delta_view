@@ -8,7 +8,17 @@ import 'package:flutter/widgets.dart';
 
 import '../../settings/app_settings.dart';
 
-enum ShortcutGroup { tabs, navigation, editing, view, folders }
+enum ShortcutGroup {
+  tabs('Tabs and app'),
+  navigation('Navigation'),
+  editing('Editing and merging'),
+  view('View'),
+  folders('Folder tree');
+
+  const ShortcutGroup(this.label);
+
+  final String label;
+}
 
 enum AppAction {
   // tabs & app
@@ -26,6 +36,8 @@ enum AppAction {
       SingleActivator(LogicalKeyboardKey.slash, control: true)),
   compareClipboard('Compare text from clipboard', ShortcutGroup.tabs,
       SingleActivator(LogicalKeyboardKey.keyV, control: true, shift: true)),
+  quit('Quit DeltaView', ShortcutGroup.tabs,
+      SingleActivator(LogicalKeyboardKey.keyQ, control: true)),
 
   // navigation in a diff
   nextChange('Next change', ShortcutGroup.navigation,
@@ -94,6 +106,13 @@ enum AppAction {
 
   /// e.g. `Ctrl+Shift+V`.
   String get keyLabel => describeActivator(activator);
+
+  /// Whether the user changed this action's key.
+  bool get isRebound => appSettings.shortcutOverrides.containsKey(name);
+
+  /// The actions in [group], in declaration order.
+  static List<AppAction> inGroup(ShortcutGroup group) =>
+      [for (final a in values) if (a.group == group) a];
 }
 
 /// Builds a [CallbackShortcuts] binding map from actions to callbacks,
@@ -101,6 +120,44 @@ enum AppAction {
 Map<ShortcutActivator, VoidCallback> bindActions(
         Map<AppAction, VoidCallback> actions) =>
     {for (final e in actions.entries) e.key.activator: e.value};
+
+/// Ctrl+1 … Ctrl+9 switch to that tab. Fixed rather than an [AppAction],
+/// so the rebindable list is not nine near-identical rows.
+SingleActivator tabNumberActivator(int number) => SingleActivator(
+      LogicalKeyboardKey(LogicalKeyboardKey.digit1.keyId + number - 1),
+      control: true,
+    );
+
+const tabNumberKeyLabel = 'Ctrl+1…9';
+
+/// Binds [action] to [activator], or restores its default with null, and
+/// saves the change.
+void rebindAction(AppAction action, SingleActivator? activator) {
+  if (activator == null ||
+      serializeActivator(activator) ==
+          serializeActivator(action.defaultActivator)) {
+    appSettings.shortcutOverrides.remove(action.name);
+  } else {
+    appSettings.shortcutOverrides[action.name] = serializeActivator(activator);
+  }
+  appSettings.changed();
+}
+
+void resetAllShortcuts() {
+  appSettings.shortcutOverrides.clear();
+  appSettings.changed();
+}
+
+/// The other actions currently bound to the same key as [action]. Views
+/// bind only the actions they use, so a clash is not always a problem,
+/// but the settings page warns about it.
+List<AppAction> conflictingActions(AppAction action) {
+  final key = serializeActivator(action.activator);
+  return [
+    for (final other in AppAction.values)
+      if (other != action && serializeActivator(other.activator) == key) other,
+  ];
+}
 
 /// `ctrl+shift+keyV`-style text: modifiers then the [LogicalKeyboardKey]
 /// key id in hex. Stable across platforms and keyboard layouts.
@@ -137,7 +194,10 @@ String describeActivator(SingleActivator a) {
     LogicalKeyboardKey.equal => '+',
     LogicalKeyboardKey.minus => '−',
     LogicalKeyboardKey.comma => ',',
+    LogicalKeyboardKey.period => '.',
     LogicalKeyboardKey.slash => '/',
+    LogicalKeyboardKey.space => 'Space',
+    LogicalKeyboardKey.escape => 'Esc',
     final k => k.keyLabel.isEmpty ? k.debugName ?? '?' : k.keyLabel,
   };
   return [
@@ -147,4 +207,53 @@ String describeActivator(SingleActivator a) {
     if (a.meta) 'Meta',
     key,
   ].join('+');
+}
+
+/// Keys that only modify others; pressing one on its own is not a
+/// shortcut. (Not const: LogicalKeyboardKey overrides ==.)
+final _modifierKeys = <LogicalKeyboardKey>{
+  LogicalKeyboardKey.control,
+  LogicalKeyboardKey.controlLeft,
+  LogicalKeyboardKey.controlRight,
+  LogicalKeyboardKey.shift,
+  LogicalKeyboardKey.shiftLeft,
+  LogicalKeyboardKey.shiftRight,
+  LogicalKeyboardKey.alt,
+  LogicalKeyboardKey.altLeft,
+  LogicalKeyboardKey.altRight,
+  LogicalKeyboardKey.altGraph,
+  LogicalKeyboardKey.meta,
+  LogicalKeyboardKey.metaLeft,
+  LogicalKeyboardKey.metaRight,
+  LogicalKeyboardKey.capsLock,
+  LogicalKeyboardKey.numLock,
+  LogicalKeyboardKey.scrollLock,
+  LogicalKeyboardKey.fn,
+};
+
+/// The activator a key press describes, or null when [key] is a modifier
+/// on its own. Used when the user records a new shortcut.
+SingleActivator? activatorForKey(
+  LogicalKeyboardKey key, {
+  bool control = false,
+  bool shift = false,
+  bool alt = false,
+  bool meta = false,
+}) {
+  if (_modifierKeys.contains(key)) return null;
+  return SingleActivator(key,
+      control: control, shift: shift, alt: alt, meta: meta);
+}
+
+/// [activatorForKey] for a live [KeyEvent], reading the modifiers that are
+/// held right now.
+SingleActivator? activatorForKeyEvent(KeyEvent event) {
+  final keyboard = HardwareKeyboard.instance;
+  return activatorForKey(
+    event.logicalKey,
+    control: keyboard.isControlPressed,
+    shift: keyboard.isShiftPressed,
+    alt: keyboard.isAltPressed,
+    meta: keyboard.isMetaPressed,
+  );
 }

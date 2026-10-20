@@ -1,0 +1,16 @@
+DeltaView extras
+================
+
+compare-with-deltaview
+    A script for GNOME Files (Nautilus), Nemo and Caja that opens the
+    selected folders or files in DeltaView. It is not installed into the
+    file manager automatically. To enable it in Nautilus:
+
+        mkdir -p ~/.local/share/nautilus/scripts
+        ln -s /opt/delta_view/extras/compare-with-deltaview \
+              ~/.local/share/nautilus/scripts/"Compare with DeltaView"
+
+    Nemo looks in ~/.local/share/nemo/scripts and Caja in
+    ~/.config/caja/scripts. The script's header and docs/command-line.md
+    in the repository (https://github.com/Dhiva-Labs/Delta_view) have the
+    details, including git difftool and mergetool setup.
