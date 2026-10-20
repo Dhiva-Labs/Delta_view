@@ -1,0 +1,54 @@
+/// How DeltaView names an SSH server and an account on it, so the
+/// known-hosts store, saved connections and the credential cache all agree.
+library;
+
+/// [host] as a lookup key: trimmed, lower-case, without the brackets an
+/// IPv6 address may be written with.
+String normalizeHost(String host) {
+  var h = host.trim().toLowerCase();
+  if (h.startsWith('[') && h.endsWith(']')) h = h.substring(1, h.length - 1);
+  return h;
+}
+
+/// `user@host:port`, with the port always present.
+String accountKey(
+        {required String username, required String host, required int port}) =>
+    '$username@${normalizeHost(host)}:$port';
+
+/// `host` or `host:port` (port shown only when it is not 22), bracketing
+/// IPv6 addresses that need it.
+String displayAddress(String host, int port) {
+  final h = normalizeHost(host);
+  if (port == 22) return h;
+  return h.contains(':') ? '[$h]:$port' : '$h:$port';
+}
+
+/// Splits what someone may type or paste into a host field:
+/// `host`, `user@host`, `host:port`, `user@host:port`, `[v6addr]:port`,
+/// or an `ssh://` / `sftp://` URL.
+({String? username, String host, int? port}) parseServerAddress(String text) {
+  var rest = text.trim();
+  rest = rest.replaceFirst(RegExp(r'^(ssh|sftp)://', caseSensitive: false), '');
+  final slash = rest.indexOf('/');
+  if (slash >= 0) rest = rest.substring(0, slash);
+
+  String? username;
+  final at = rest.lastIndexOf('@');
+  if (at > 0) {
+    username = rest.substring(0, at);
+    rest = rest.substring(at + 1);
+  }
+
+  int? port;
+  final bracketed = RegExp(r'^\[([^\]]+)\](?::(\d+))?$').firstMatch(rest);
+  if (bracketed != null) {
+    rest = bracketed.group(1)!;
+    port = int.tryParse(bracketed.group(2) ?? '');
+  } else if (':'.allMatches(rest).length == 1) {
+    // One colon: host:port. More than one is a bare IPv6 address.
+    final colon = rest.indexOf(':');
+    port = int.tryParse(rest.substring(colon + 1));
+    if (port != null) rest = rest.substring(0, colon);
+  }
+  return (username: username, host: rest, port: port);
+}
