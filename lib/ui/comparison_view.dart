@@ -20,7 +20,9 @@ IconData comparisonIcon(Comparison comparison) => switch (comparison) {
               : Icons.folder_copy_outlined,
       FileComparison c => isImageFile(c.left.label) && isImageFile(c.right.label)
           ? Icons.image_outlined
-          : Icons.description_outlined,
+          : isStructuredFile(c.left.label) && isStructuredFile(c.right.label)
+              ? Icons.account_tree_outlined
+              : Icons.description_outlined,
       TextComparison _ => Icons.content_paste_outlined,
       ThreeWayComparison _ => Icons.merge_type,
     };
