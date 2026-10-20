@@ -22,3 +22,33 @@ String displayAddress(String host, int port) {
   if (port == 22) return h;
   return h.contains(':') ? '[$h]:$port' : '$h:$port';
 }
+
+/// Splits what someone may type or paste into a host field:
+/// `host`, `user@host`, `host:port`, `user@host:port`, `[v6addr]:port`,
+/// or an `ssh://` / `sftp://` URL.
+({String? username, String host, int? port}) parseServerAddress(String text) {
+  var rest = text.trim();
+  rest = rest.replaceFirst(RegExp(r'^(ssh|sftp)://', caseSensitive: false), '');
+  final slash = rest.indexOf('/');
+  if (slash >= 0) rest = rest.substring(0, slash);
+
+  String? username;
+  final at = rest.lastIndexOf('@');
+  if (at > 0) {
+    username = rest.substring(0, at);
+    rest = rest.substring(at + 1);
+  }
+
+  int? port;
+  final bracketed = RegExp(r'^\[([^\]]+)\](?::(\d+))?$').firstMatch(rest);
+  if (bracketed != null) {
+    rest = bracketed.group(1)!;
+    port = int.tryParse(bracketed.group(2) ?? '');
+  } else if (':'.allMatches(rest).length == 1) {
+    // One colon: host:port. More than one is a bare IPv6 address.
+    final colon = rest.indexOf(':');
+    port = int.tryParse(rest.substring(colon + 1));
+    if (port != null) rest = rest.substring(0, colon);
+  }
+  return (username: username, host: rest, port: port);
+}

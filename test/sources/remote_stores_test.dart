@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:delta_view/compare/sources/source_spec.dart';
 import 'package:delta_view/remote/credential_cache.dart';
 import 'package:delta_view/remote/known_hosts.dart';
+import 'package:delta_view/remote/remote_address.dart';
 import 'package:delta_view/remote/saved_connections.dart';
 import 'package:delta_view/remote/sha256.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -225,6 +226,21 @@ void main() {
       expect(jsonDecode(text)['connections'][0].keys,
           unorderedEquals(['host', 'port', 'username', 'auth', 'keyPath']));
     });
+  });
+
+  test('server addresses are split into user, host and port', () {
+    expect(parseServerAddress('files.example.com'),
+        (username: null, host: 'files.example.com', port: null));
+    expect(parseServerAddress(' deploy@files.example.com:2222 '),
+        (username: 'deploy', host: 'files.example.com', port: 2222));
+    expect(parseServerAddress('sftp://me@host/srv/app'),
+        (username: 'me', host: 'host', port: null));
+    expect(parseServerAddress('[fe80::1]:2200'),
+        (username: null, host: 'fe80::1', port: 2200));
+    expect(parseServerAddress('fe80::1'),
+        (username: null, host: 'fe80::1', port: null));
+    expect(displayAddress('FE80::1', 2200), '[fe80::1]:2200');
+    expect(displayAddress('Host', 22), 'host');
   });
 
   test('credential cache is keyed by account', () {
