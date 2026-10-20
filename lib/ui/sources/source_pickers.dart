@@ -4,7 +4,7 @@ library;
 
 import 'package:flutter/material.dart';
 
-import '../../compare/sources/source_spec.dart';
+import '../../compare/comparison.dart';
 
 /// Whether archive and remote sources can be picked yet. The home screen
 /// hides the "Archive…" and "Remote…" choices while this is false.
@@ -22,3 +22,12 @@ Future<ArchiveSource?> pickArchiveSource(BuildContext context) async => null;
 Future<SftpSource?> pickRemoteSource(BuildContext context,
         {required bool folder}) async =>
     null;
+
+/// Makes every side of [comparison] ready to open: SFTP sides restored
+/// from recents or the last session carry no secret, so this asks for the
+/// password or key (reusing ones entered earlier in this run) and checks
+/// the host key. Returns null when the user cancels.
+/// Placeholder: returns [comparison] unchanged until remote support lands.
+Future<Comparison?> ensureComparisonReady(
+        BuildContext context, Comparison comparison) async =>
+    comparison;
