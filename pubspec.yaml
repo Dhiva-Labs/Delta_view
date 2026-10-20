@@ -30,3 +30,5 @@ flutter:
   assets:
     # The Linux runner sets this as the window icon.
     - assets/brand/delta_view_256.png
+    # Shown on the licence page, from About.
+    - LICENSE

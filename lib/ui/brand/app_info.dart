@@ -2,6 +2,9 @@
 /// the window title. One place to change when a release is cut.
 library;
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+
 const appName = 'DeltaView';
 
 /// Must match `version:` in pubspec.yaml (without the build number); a
@@ -18,5 +21,15 @@ const appRepositoryUrl = 'https://github.com/Dhiva-Labs/Delta_view';
 
 const appCopyright = '© 2026 Dhiva Labs';
 
-/// Shown in the About dialog. The repository carries the licence text.
-const appLicense = 'Open source. See LICENSE in the repository.';
+/// Shown in the About dialog. The full text is the LICENSE file, which
+/// the licence page lists (see [registerAppLicense]).
+const appLicense = 'MIT License';
+
+/// Lists DeltaView's own MIT licence on the licence page, above the
+/// licences of the packages it uses.
+void registerAppLicense() {
+  LicenseRegistry.addLicense(() async* {
+    yield LicenseEntryWithLineBreaks(
+        const [appName], await rootBundle.loadString('LICENSE'));
+  });
+}

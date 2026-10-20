@@ -20,6 +20,7 @@ Future<void> main(List<String> args) async {
   }
 
   WidgetsFlutterBinding.ensureInitialized();
+  registerAppLicense();
   await windowManager.ensureInitialized();
   await appSettings.load();
 

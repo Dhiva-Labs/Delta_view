@@ -57,6 +57,9 @@ cp "$ROOT/assets/brand/delta_view.svg" \
 
 # Extras: the "Compare with DeltaView" file manager script and its notes.
 # Not enabled by default; docs/command-line.md explains how to install it.
+mkdir -p "$PKG/usr/share/doc/$PKGNAME"
+cp "$ROOT/LICENSE" "$PKG/usr/share/doc/$PKGNAME/copyright"
+
 mkdir -p "$PKG/opt/delta_view/extras"
 cp "$ROOT/packaging/extras/"* "$PKG/opt/delta_view/extras/"
 

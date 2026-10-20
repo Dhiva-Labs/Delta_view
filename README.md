@@ -100,3 +100,7 @@ sessions, plus widget tests of the main views.
   image and structured views
 - `lib/cli/` — command-line parsing
 - `assets/brand/` — the app icon sources
+
+## License
+
+DeltaView is released under the [MIT License](LICENSE).
