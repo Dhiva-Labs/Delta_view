@@ -5,9 +5,9 @@ import 'diff/line_diff.dart';
 
 const seedColor = Color(0xFF6366F1); // indigo
 
-ThemeData buildTheme(Brightness brightness) {
+ThemeData buildTheme(Brightness brightness, {Color seed = seedColor}) {
   final scheme = ColorScheme.fromSeed(
-    seedColor: seedColor,
+    seedColor: seed,
     brightness: brightness,
   );
   final isDark = brightness == Brightness.dark;

@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:delta_view/compare/diff_side.dart';
+import 'package:delta_view/compare/sources/source_spec.dart';
 import 'package:delta_view/ui/file_diff_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -19,8 +21,8 @@ void main() {
       await tester.pumpWidget(MaterialApp(
         home: Scaffold(
           body: FileDiffView(
-            leftPath: p.join(dir.path, 'a.txt'),
-            rightPath: p.join(dir.path, 'b.txt'),
+            left: DiffSide.source(LocalSource(p.join(dir.path, 'a.txt'))),
+            right: DiffSide.source(LocalSource(p.join(dir.path, 'b.txt'))),
           ),
         ),
       ));

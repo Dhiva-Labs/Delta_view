@@ -1,15 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:isolate';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:path/path.dart' as p;
-
+import '../compare/diff_side.dart';
 import '../diff/line_diff.dart';
 import '../theme.dart';
+import 'shell.dart';
 
 const _maxDiffBytes = 8 * 1024 * 1024;
 const _rowExtent = 22.0;
@@ -17,16 +16,20 @@ const _rowExtent = 22.0;
 class FileDiffView extends StatefulWidget {
   const FileDiffView({
     super.key,
-    required this.leftPath,
-    required this.rightPath,
+    required this.left,
+    required this.right,
     this.title,
     this.onBack,
+    this.startEditing = false,
   });
 
-  final String leftPath;
-  final String rightPath;
+  final DiffSide left;
+  final DiffSide right;
   final String? title;
   final VoidCallback? onBack;
+
+  /// Open in edit mode (e.g. an empty clipboard compare waiting for text).
+  final bool startEditing;
 
   @override
   State<FileDiffView> createState() => _FileDiffViewState();
@@ -37,7 +40,7 @@ class _FileDiffViewState extends State<FileDiffView> {
   String? _notice;
   String? _error;
   bool _loaded = false;
-  bool _editing = false;
+  late bool _editing = widget.startEditing;
   int _currentBlock = -1;
 
   final _viewScroll = ScrollController();
@@ -93,8 +96,8 @@ class _FileDiffViewState extends State<FileDiffView> {
 
   Future<void> _load() async {
     try {
-      final left = await _readSide(widget.leftPath);
-      final right = await _readSide(widget.rightPath);
+      final left = await _readSide(widget.left);
+      final right = await _readSide(widget.right);
 
       if (left.binary || right.binary) {
         setState(() => _notice = 'Binary files — no text diff available.');
@@ -133,12 +136,11 @@ class _FileDiffViewState extends State<FileDiffView> {
     return Isolate.run(() => buildSideBySide(left, right));
   }
 
-  Future<_SideContent> _readSide(String path) async {
-    final file = File(path);
-    if (!file.existsSync()) return const _SideContent(exists: false);
-    final length = await file.length();
-    if (length > _maxDiffBytes) return const _SideContent(tooLarge: true);
-    final bytes = await file.readAsBytes();
+  Future<_SideContent> _readSide(DiffSide side) async {
+    if (side.isMemory) return _SideContent(text: side.initialText ?? '');
+    final bytes = await side.read();
+    if (bytes == null) return const _SideContent(exists: false);
+    if (bytes.length > _maxDiffBytes) return const _SideContent(tooLarge: true);
     final probe = math.min(bytes.length, 8192);
     for (var i = 0; i < probe; i++) {
       if (bytes[i] == 0) return const _SideContent(binary: true);
@@ -158,6 +160,7 @@ class _FileDiffViewState extends State<FileDiffView> {
     _debounce = Timer(const Duration(milliseconds: 250), _rediff);
     // Repaint save-button enabled state immediately.
     if (mounted) setState(() {});
+    TabScope.maybeOf(context)?.setDirty(_leftDirty || _rightDirty);
   }
 
   Future<void> _rediff() async {
@@ -217,20 +220,23 @@ class _FileDiffViewState extends State<FileDiffView> {
     final messenger = ScaffoldMessenger.of(context);
     try {
       final saved = <String>[];
-      if (left && _leftDirty) {
-        await File(widget.leftPath).writeAsString(_leftController.text);
+      if (left && _leftDirty && !widget.left.isMemory) {
+        await widget.left.write(utf8.encode(_leftController.text));
         _savedLeft = _leftController.text;
         _leftExists = true;
-        saved.add(p.basename(widget.leftPath));
+        saved.add(widget.left.label);
       }
-      if (right && _rightDirty) {
-        await File(widget.rightPath).writeAsString(_rightController.text);
+      if (right && _rightDirty && !widget.right.isMemory) {
+        await widget.right.write(utf8.encode(_rightController.text));
         _savedRight = _rightController.text;
         _rightExists = true;
-        saved.add(p.basename(widget.rightPath));
+        saved.add(widget.right.label);
       }
       if (saved.isEmpty) return;
-      if (mounted) setState(() {});
+      if (mounted) {
+        setState(() {});
+        TabScope.maybeOf(context)?.setDirty(_leftDirty || _rightDirty);
+      }
       messenger.showSnackBar(SnackBar(
         content: Text('Saved ${saved.join(' and ')}'),
         behavior: SnackBarBehavior.floating,
@@ -263,7 +269,7 @@ class _FileDiffViewState extends State<FileDiffView> {
     );
   }
 
-  String get _title => widget.title ?? p.basename(widget.leftPath);
+  String get _title => widget.title ?? widget.left.label;
 
   @override
   Widget build(BuildContext context) {
@@ -339,7 +345,7 @@ class _FileDiffViewState extends State<FileDiffView> {
                 ],
                 if (_editing) ...[
                   TextButton.icon(
-                    onPressed: _leftDirty
+                    onPressed: _leftDirty && !widget.left.isMemory
                         ? () => _save(left: true, right: false)
                         : null,
                     icon: const Icon(Icons.save_outlined, size: 17),
@@ -347,7 +353,7 @@ class _FileDiffViewState extends State<FileDiffView> {
                         _leftExists ? 'Save left' : 'Create left'),
                   ),
                   TextButton.icon(
-                    onPressed: _rightDirty
+                    onPressed: _rightDirty && !widget.right.isMemory
                         ? () => _save(left: false, right: true)
                         : null,
                     icon: const Icon(Icons.save_outlined, size: 17),
@@ -387,8 +393,8 @@ class _FileDiffViewState extends State<FileDiffView> {
                 Expanded(
                   child: Text(
                     _leftExists
-                        ? widget.leftPath
-                        : '${widget.leftPath}  (does not exist yet)',
+                        ? widget.left.description
+                        : '${widget.left.description}  (does not exist yet)',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -399,8 +405,8 @@ class _FileDiffViewState extends State<FileDiffView> {
                 Expanded(
                   child: Text(
                     _rightExists
-                        ? widget.rightPath
-                        : '${widget.rightPath}  (does not exist yet)',
+                        ? widget.right.description
+                        : '${widget.right.description}  (does not exist yet)',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.right,

@@ -4,81 +4,58 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
-import 'file_diff_view.dart';
-import 'folder_diff_view.dart';
+import '../compare/comparison.dart';
+import 'comparison_view.dart';
 import 'shell.dart';
 
 enum CompareMode { folders, files }
 
-enum _TabStage { pick, folder, file }
-
-/// The content of one comparison tab: starts as a picker, becomes a folder
-/// tree or file diff after Compare, and can go back for a fresh pick.
+/// The content of one comparison tab: starts as a picker (or straight at
+/// [initial]), becomes a comparison view, and can go back for a fresh pick.
 class TabRoot extends StatefulWidget {
-  const TabRoot({super.key, required this.tabId});
+  const TabRoot({super.key, required this.tabId, this.initial});
 
   final int tabId;
+  final Comparison? initial;
 
   @override
   State<TabRoot> createState() => _TabRootState();
 }
 
 class _TabRootState extends State<TabRoot> {
-  _TabStage _stage = _TabStage.pick;
-  CompareMode _mode = CompareMode.folders;
-  String? _leftPath;
-  String? _rightPath;
+  late Comparison? _comparison = widget.initial;
 
-  void _onCompare(CompareMode mode, String left, String right) {
-    setState(() {
-      _mode = mode;
-      _leftPath = left;
-      _rightPath = right;
-      _stage = mode == CompareMode.folders ? _TabStage.folder : _TabStage.file;
-    });
-    TabbedShellState.of(context).updateTab(
-      widget.tabId,
-      title: '${p.basename(left)} ↔ ${p.basename(right)}',
-      icon: mode == CompareMode.folders
-          ? Icons.folder_copy_outlined
-          : Icons.description_outlined,
-    );
+  /// The last comparison, kept so the picker can start from its paths.
+  Comparison? _previous;
+
+  void _onCompare(Comparison comparison) {
+    setState(() => _comparison = comparison);
+    TabScope.maybeOf(context)?.setComparison(comparison);
   }
 
   void _backToPicker() {
-    setState(() => _stage = _TabStage.pick);
-    TabbedShellState.of(context).updateTab(
-      widget.tabId,
-      title: 'New comparison',
-      icon: Icons.add_circle_outline,
-    );
+    setState(() {
+      _previous = _comparison;
+      _comparison = null;
+    });
+    TabScope.maybeOf(context)?.setComparison(null);
   }
 
   @override
   Widget build(BuildContext context) {
+    final comparison = _comparison;
     return AnimatedSwitcher(
       duration: const Duration(milliseconds: 220),
-      child: switch (_stage) {
-        _TabStage.pick => PickerView(
-            key: const ValueKey('pick'),
-            initialMode: _mode,
-            initialLeft: _leftPath,
-            initialRight: _rightPath,
-            onCompare: _onCompare,
-          ),
-        _TabStage.folder => FolderDiffView(
-            key: ValueKey('folder-$_leftPath-$_rightPath'),
-            leftRoot: _leftPath!,
-            rightRoot: _rightPath!,
-            onBack: _backToPicker,
-          ),
-        _TabStage.file => FileDiffView(
-            key: ValueKey('file-$_leftPath-$_rightPath'),
-            leftPath: _leftPath!,
-            rightPath: _rightPath!,
-            onBack: _backToPicker,
-          ),
-      },
+      child: comparison == null
+          ? PickerView(
+              key: const ValueKey('pick'),
+              previous: _previous,
+              onCompare: _onCompare,
+            )
+          : KeyedSubtree(
+              key: ValueKey(comparisonKey(comparison)),
+              child: buildComparisonView(comparison, onBack: _backToPicker),
+            ),
     );
   }
 }
@@ -87,24 +64,33 @@ class PickerView extends StatefulWidget {
   const PickerView({
     super.key,
     required this.onCompare,
-    this.initialMode = CompareMode.folders,
-    this.initialLeft,
-    this.initialRight,
+    this.previous,
   });
 
-  final void Function(CompareMode mode, String left, String right) onCompare;
-  final CompareMode initialMode;
-  final String? initialLeft;
-  final String? initialRight;
+  final void Function(Comparison comparison) onCompare;
+
+  /// The comparison this tab showed before, to start from its paths.
+  final Comparison? previous;
 
   @override
   State<PickerView> createState() => _PickerViewState();
 }
 
 class _PickerViewState extends State<PickerView> {
-  late CompareMode _mode = widget.initialMode;
-  late String? _leftPath = widget.initialLeft;
-  late String? _rightPath = widget.initialRight;
+  late CompareMode _mode = widget.previous is FileComparison
+      ? CompareMode.files
+      : CompareMode.folders;
+  late String? _leftPath = _localPath(widget.previous, left: true);
+  late String? _rightPath = _localPath(widget.previous, left: false);
+
+  static String? _localPath(Comparison? c, {required bool left}) {
+    final spec = switch (c) {
+      FolderComparison c => left ? c.left : c.right,
+      FileComparison c => left ? c.left : c.right,
+      _ => null,
+    };
+    return spec is LocalSource ? spec.path : null;
+  }
 
   bool get _ready => _leftPath != null && _rightPath != null;
 
@@ -148,7 +134,9 @@ class _PickerViewState extends State<PickerView> {
       ));
       return;
     }
-    widget.onCompare(_mode, left, right);
+    widget.onCompare(_mode == CompareMode.folders
+        ? FolderComparison(LocalSource(left), LocalSource(right))
+        : FileComparison(LocalSource(left), LocalSource(right)));
   }
 
   @override

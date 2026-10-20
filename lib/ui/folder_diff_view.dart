@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
+import '../compare/comparison.dart';
 import '../compare/folder_compare.dart';
 import '../theme.dart';
-import 'file_diff_view.dart';
 import 'shell.dart';
 
 enum TreeFilter { all, changes, leftOnly, rightOnly }
@@ -11,14 +11,18 @@ enum TreeFilter { all, changes, leftOnly, rightOnly }
 class FolderDiffView extends StatefulWidget {
   const FolderDiffView({
     super.key,
-    required this.leftRoot,
-    required this.rightRoot,
-    required this.onBack,
+    required this.left,
+    required this.right,
+    this.onBack,
   });
 
-  final String leftRoot;
-  final String rightRoot;
-  final VoidCallback onBack;
+  final SourceSpec left;
+  final SourceSpec right;
+  final VoidCallback? onBack;
+
+  /// The local roots. Only local folders are scanned so far.
+  String get leftRoot => (left as LocalSource).path;
+  String get rightRoot => (right as LocalSource).path;
 
   @override
   State<FolderDiffView> createState() => _FolderDiffViewState();
@@ -45,6 +49,10 @@ class _FolderDiffViewState extends State<FolderDiffView> {
       _progress = null;
     });
     try {
+      if (widget.left is! LocalSource || widget.right is! LocalSource) {
+        throw UnsupportedError(
+            'Only folders on this computer can be compared so far.');
+      }
       final root = await compareFolders(
         widget.leftRoot,
         widget.rightRoot,
@@ -119,16 +127,16 @@ class _FolderDiffViewState extends State<FolderDiffView> {
   }
 
   void _openFile(CompareNode node) {
-    // Pass both paths even when one side is missing — the diff view can
-    // then create the missing file on save.
-    TabbedShellState.of(context).openTab(
-      title: node.name,
-      icon: Icons.description_outlined,
-      content: FileDiffView(
-        leftPath: p.join(widget.leftRoot, node.relativePath),
-        rightPath: p.join(widget.rightRoot, node.relativePath),
-        title: node.relativePath,
+    // Pass both sides even when one is missing — the diff view can then
+    // create the missing file on save.
+    final relative = p.split(node.relativePath).join('/');
+    TabbedShellState.of(context).openComparison(
+      FileComparison(
+        widget.left.child(relative),
+        widget.right.child(relative),
+        titleOverride: relative,
       ),
+      title: node.name,
     );
   }
 
@@ -143,18 +151,19 @@ class _FolderDiffViewState extends State<FolderDiffView> {
           padding: const EdgeInsets.fromLTRB(8, 8, 12, 0),
           child: Row(
             children: [
-              IconButton(
-                tooltip: 'Change folders',
-                onPressed: widget.onBack,
-                icon: const Icon(Icons.arrow_back, size: 20),
-              ),
+              if (widget.onBack != null)
+                IconButton(
+                  tooltip: 'Change folders',
+                  onPressed: widget.onBack,
+                  icon: const Icon(Icons.arrow_back, size: 20),
+                ),
               const SizedBox(width: 4),
-              Expanded(child: _PathChip(path: widget.leftRoot)),
+              Expanded(child: _PathChip(path: widget.left.description)),
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 10),
                 child: Icon(Icons.compare_arrows, size: 18),
               ),
-              Expanded(child: _PathChip(path: widget.rightRoot)),
+              Expanded(child: _PathChip(path: widget.right.description)),
               const SizedBox(width: 6),
               IconButton(
                 tooltip: 'Re-scan',
