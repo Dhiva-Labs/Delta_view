@@ -198,6 +198,27 @@ void main() {
     expect(find.text('Two, merged'), findsOneWidget);
   });
 
+  testWidgets('double-click edits, and Cancel throws the edit away',
+      (tester) async {
+    await open(tester,
+        Scaffold(body: ThreeWayMergeView(comparison: comparison())));
+
+    // The unresolved conflict shows the base line as a placeholder.
+    final placeholder = find.text('two');
+    await tester.tap(placeholder.first);
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tap(placeholder.first);
+    await tester.pumpAndSettle();
+    expect(find.byType(TextField), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField), 'typed');
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(find.byType(TextField), findsNothing);
+    expect(find.text('typed'), findsNothing);
+    expect(find.text('1 conflict left'), findsOneWidget);
+  });
+
   testWidgets('guards closing the tab while unsaved', (tester) async {
     await open(tester, TabbedShell(initialComparisons: [comparison()]));
     final shell = tester.state<TabbedShellState>(find.byType(TabbedShell));

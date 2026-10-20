@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart' show kDoubleTapTimeout;
 import 'package:flutter/material.dart';
 
 import '../../compare/comparison.dart';
@@ -208,6 +209,24 @@ class _ThreeWayMergeViewState extends State<ThreeWayMergeView> {
         c.isChange || doc.state(chunk).resolution == Resolution.edited;
     setState(() => _selected = selectable ? chunk : null);
     _focus.requestFocus();
+  }
+
+  DateTime? _lastTap;
+  int? _lastTapChunk;
+
+  void _tapMerged(int chunk) {
+    final now = DateTime.now();
+    final last = _lastTap;
+    if (_lastTapChunk == chunk &&
+        last != null &&
+        now.difference(last) < kDoubleTapTimeout) {
+      _lastTap = null;
+      _startEdit(chunk);
+      return;
+    }
+    _lastTap = now;
+    _lastTapChunk = chunk;
+    _select(chunk);
   }
 
   void _take(int chunk, Resolution resolution) {
@@ -512,7 +531,7 @@ class _ThreeWayMergeViewState extends State<ThreeWayMergeView> {
     final numberWidth = lineNumberWidth(maxLines + 50);
     final actions = MergeRowActions(
       select: _select,
-      edit: _startEdit,
+      tapMerged: _tapMerged,
       take: _take,
       append: _append,
       contextMenu: _showChunkMenu,
@@ -649,9 +668,10 @@ class _ThreeWayMergeViewState extends State<ThreeWayMergeView> {
                   ),
                 ),
                 const SizedBox(width: 14),
-                Flexible(
-                  child: _StatusChip(doc: doc, palette: palette),
-                ),
+                // The conflict count matters most: it keeps its size while
+                // the title and the note beside it shrink.
+                _StatusChip(doc: doc, palette: palette),
+                Flexible(child: _AutoMergedNote(doc: doc)),
                 if (_dirty)
                   Padding(
                     padding: const EdgeInsets.only(left: 10),
@@ -663,6 +683,7 @@ class _ThreeWayMergeViewState extends State<ThreeWayMergeView> {
               ],
             ),
           ),
+          const SizedBox(width: 12),
           if (targets.isNotEmpty) ...[
             Text(
               position < 0
@@ -800,7 +821,6 @@ class _StatusChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final unresolved = doc.unresolvedCount;
-    final auto = doc.changeIndexes.length - doc.conflictCount;
     final (icon, text, color) = unresolved > 0
         ? (
             Icons.warning_amber_rounded,
@@ -814,50 +834,55 @@ class _StatusChip extends StatelessWidget {
                 palette.added
               )
             : (Icons.check_circle_outline, 'No conflicts', palette.added);
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: color.withValues(alpha: 0.3)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 15, color: color),
-              const SizedBox(width: 6),
-              Text(
-                text,
-                style: TextStyle(
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w700,
-                  color: color,
-                ),
-              ),
-            ],
-          ),
-        ),
-        if (auto > 0)
-          Flexible(
-            child: Padding(
-              padding: const EdgeInsets.only(left: 10),
-              child: Text(
-                auto == 1
-                    ? '1 change merged automatically'
-                    : '$auto changes merged automatically',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 15, color: color),
+          const SizedBox(width: 6),
+          Text(
+            text,
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w700,
+              color: color,
             ),
           ),
-      ],
+        ],
+      ),
+    );
+  }
+}
+
+/// "3 changes merged automatically".
+class _AutoMergedNote extends StatelessWidget {
+  const _AutoMergedNote({required this.doc});
+
+  final MergeDocument doc;
+
+  @override
+  Widget build(BuildContext context) {
+    final auto = doc.changeIndexes.length - doc.conflictCount;
+    if (auto == 0) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(left: 10),
+      child: Text(
+        auto == 1
+            ? '1 change merged automatically'
+            : '$auto changes merged automatically',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          fontSize: 12,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      ),
     );
   }
 }

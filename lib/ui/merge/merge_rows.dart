@@ -67,14 +67,16 @@ double lineNumberWidth(int lines) => 14.0 + 8.0 * math.max(2, '$lines'.length);
 class MergeRowActions {
   const MergeRowActions({
     required this.select,
-    required this.edit,
+    required this.tapMerged,
     required this.take,
     required this.append,
     required this.contextMenu,
   });
 
   final void Function(int chunk) select;
-  final void Function(int chunk) edit;
+
+  /// A click on the merged pane: selects, and a quick second click edits.
+  final void Function(int chunk) tapMerged;
   final void Function(int chunk, Resolution resolution) take;
   final void Function(int chunk, {required bool left}) append;
   final void Function(int chunk, Offset globalPosition) contextMenu;
@@ -170,7 +172,7 @@ class MergeLineRow extends StatelessWidget {
                 first && (c.isChange || state.resolution == Resolution.edited)
                     ? state.resolution
                     : null,
-            onDoubleTap: () => actions.edit(chunk),
+            onTap: () => actions.tapMerged(chunk),
           ),
         ),
         _Gutter(
@@ -244,7 +246,7 @@ class _LineCell extends StatelessWidget {
     this.muted = false,
     this.hint,
     this.badge,
-    this.onDoubleTap,
+    this.onTap,
   });
 
   final List<String> lines;
@@ -260,7 +262,10 @@ class _LineCell extends StatelessWidget {
   final bool muted;
   final String? hint;
   final Resolution? badge;
-  final VoidCallback? onDoubleTap;
+
+  /// A plain tap handler: a double-tap recognizer here would hold every
+  /// single click back until the double-tap timeout.
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -300,7 +305,7 @@ class _LineCell extends StatelessWidget {
     }
 
     return GestureDetector(
-      onDoubleTap: onDoubleTap,
+      onTap: onTap,
       child: Container(
         color: has ? background : Color.alphaBlend(filler, background),
         child: Row(
@@ -528,41 +533,45 @@ class MergeChunkEditor extends StatelessWidget {
             ],
           ),
         ),
-        Container(
-          height: MergeLayout.editorChrome,
-          color: scheme.primaryContainer.withValues(alpha: 0.5),
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Row(
-            children: [
-              Icon(Icons.edit_outlined, size: 15, color: scheme.primary),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Editing by hand · Ctrl+Enter applies · Esc cancels',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: scheme.onPrimaryContainer,
+        // Part of the text field's tap region, so pressing Cancel is not
+        // first taken as a click outside the field (which applies).
+        TextFieldTapRegion(
+          child: Container(
+            height: MergeLayout.editorChrome,
+            color: scheme.primaryContainer.withValues(alpha: 0.5),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              children: [
+                Icon(Icons.edit_outlined, size: 15, color: scheme.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Editing by hand · Ctrl+Enter applies · Esc cancels',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: scheme.onPrimaryContainer,
+                    ),
                   ),
                 ),
-              ),
-              TextButton(
-                style: TextButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
+                TextButton(
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  onPressed: onCancel,
+                  child: const Text('Cancel'),
                 ),
-                onPressed: onCancel,
-                child: const Text('Cancel'),
-              ),
-              const SizedBox(width: 4),
-              FilledButton.tonal(
-                style: FilledButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
+                const SizedBox(width: 4),
+                FilledButton.tonal(
+                  style: FilledButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  onPressed: onApply,
+                  child: const Text('Apply'),
                 ),
-                onPressed: onApply,
-                child: const Text('Apply'),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ],
