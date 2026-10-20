@@ -8,6 +8,7 @@ environment:
 
 dependencies:
   archive: ^4.5.2
+  crypto: ^3.0.7
   dartssh2: ^4.1.0
   desktop_drop: ^0.8.4
   file_selector: ^1.1.0

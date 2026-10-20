@@ -120,6 +120,37 @@ void main() {
     expect(crlf(loose).status, EntryStatus.identical);
   });
 
+  test('line endings still count when only other rules are relaxed',
+      () async {
+    File(p.join(left, 'crlf.txt')).writeAsStringSync('A\r\nb\r\n');
+    File(p.join(right, 'crlf.txt')).writeAsStringSync('a\nb\n');
+
+    final result = await scan(
+        options: const ScanOptions(
+            compareOptions:
+                CompareOptions(ignoreCase: true, ignoreLineEndings: false)));
+    final node = result.root.children.firstWhere((c) => c.name == 'crlf.txt');
+    expect(node.status, EntryStatus.modified);
+  });
+
+  test('UTF-16 files are compared as text, not as binary', () async {
+    List<int> utf16le(String text) => [
+          0xFF, 0xFE,
+          for (final unit in text.codeUnits) ...[unit & 0xFF, unit >> 8],
+        ];
+    File(p.join(left, 'wide.txt')).writeAsBytesSync(utf16le('Hello\nworld\n'));
+    File(p.join(right, 'wide.txt'))
+        .writeAsBytesSync(utf16le('hello\nworld\nagain\n'));
+
+    final result = await scan(
+        options: const ScanOptions(
+            compareOptions: CompareOptions(ignoreCase: true)));
+    final node = result.root.children.firstWhere((c) => c.name == 'wide.txt');
+    expect(node.status, EntryStatus.modified);
+    expect(node.addedLines, 1);
+    expect(node.removedLines, 0);
+  });
+
   test('a missing folder fails with a clear message', () async {
     await expectLater(
       compareFolders(LocalSource(p.join(tempRoot.path, 'nope')),

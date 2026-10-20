@@ -6,7 +6,6 @@ import 'package:delta_view/remote/credential_cache.dart';
 import 'package:delta_view/remote/known_hosts.dart';
 import 'package:delta_view/remote/remote_address.dart';
 import 'package:delta_view/remote/saved_connections.dart';
-import 'package:delta_view/remote/sha256.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
@@ -16,9 +15,6 @@ const _ed25519 = 'AAAAC3NzaC1lZDI1NTE5AAAAIPtU/7QRwVg2/IHmb/Zdq9WH8OJmUW0qVaXwI3
 const _ed25519Fingerprint = 'zpT6+C4tm1uzpqoICNae2nqKl6Hpxd+HBE4dVy7I14w';
 const _rsa = 'AAAAB3NzaC1yc2EAAAADAQABAAABAQCeos0allqRDRnZmNHm/wtjvT3VG6jBVFu+A1OQ623v9ROLCGFru90Ba7yidvTv0uSk1WjkraYFVvZlmbXiyYpMfhQahDBFuaSv0p29N+3Q6Z6FofnDfPFxM8fA/tsiD/ybRF2IKsjFX47PZy4TKG2iQ53Ql4ZwQKxQ/rXkBpSmGc/nEBQ6bkP+44QER+aCgzstRiw6N0+wngYnFPbjxORhHfm858awZzbqVZ+TaObfTtumEao72yUWssG1fyvUpLpijlDr0VkIYQ5nJMyLryGbi8+RtSI95JSW7AHwL5tQCUV8XULvECeId9foZfZqjLXhud5k9ExM7/kzSSlIxLxP';
 const _rsaFingerprint = 'XgSAAOMT2S7YJRWcj9hHCgfQfQ4VQOL/xj/n7Vpbsa0';
-
-String _hex(List<int> bytes) =>
-    bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
 void main() {
   late Directory tmp;
@@ -32,19 +28,6 @@ void main() {
   });
 
   group('fingerprints', () {
-    test('SHA-256 matches the standard test vectors', () {
-      expect(_hex(sha256([])),
-          'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
-      expect(_hex(sha256(utf8.encode('abc'))),
-          'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
-      expect(
-          _hex(sha256(utf8.encode(
-              'abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq'))),
-          '248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1');
-      expect(_hex(sha256(List.filled(1000000, 0x61))),
-          'cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0');
-    });
-
     test('match what ssh-keygen prints', () {
       expect(openSshFingerprint(base64.decode(_ed25519)), _ed25519Fingerprint);
       expect(openSshFingerprint(base64.decode(_rsa)), _rsaFingerprint);

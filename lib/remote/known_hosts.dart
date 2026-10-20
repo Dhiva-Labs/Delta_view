@@ -7,17 +7,17 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:crypto/crypto.dart' show sha256;
 import 'package:path/path.dart' as p;
 
 import 'json_file.dart';
 import 'remote_address.dart';
-import 'sha256.dart';
 
 /// The SHA-256 fingerprint of an SSH public key blob (the base64 field of
 /// a `.pub` or `known_hosts` line, decoded), as `ssh-keygen -l` prints it
 /// after `SHA256:`: base64 without padding.
 String openSshFingerprint(List<int> keyBlob) =>
-    base64.encode(sha256(keyBlob)).replaceAll('=', '');
+    base64.encode(sha256.convert(keyBlob).bytes).replaceAll('=', '');
 
 /// A short, familiar name for a host key algorithm, e.g. `ED25519`.
 String keyTypeLabel(String keyType) {

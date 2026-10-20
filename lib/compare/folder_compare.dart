@@ -9,15 +9,14 @@ library;
 
 import 'dart:async';
 import 'dart:collection';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 
-import '../diff/compare_options.dart';
 import '../diff/line_diff.dart';
+import '../diff/text_codec.dart' as codec;
 import 'folder_format.dart';
 import 'ignore_rules.dart';
 import 'sources/file_source.dart';
@@ -839,21 +838,25 @@ bool _listEquals(List<String> a, List<String> b) {
   return true;
 }
 
-/// A NUL byte in the first 8 kB marks a file as binary, as git does.
-bool looksBinary(List<int> bytes) {
-  final probe = bytes.length < 8192 ? bytes.length : 8192;
-  for (var i = 0; i < probe; i++) {
-    if (bytes[i] == 0) return true;
-  }
-  return false;
-}
+/// A NUL byte in the first 8 kB marks a file as binary, as git does,
+/// except in UTF-16 text, where NULs are normal.
+bool looksBinary(List<int> bytes) => codec.looksBinary(bytes);
 
+/// The file's text with its line endings exactly as stored, so the compare
+/// rules (not the decoder) decide whether CRLF and LF differ. Reads UTF-8,
+/// UTF-16 with a byte order mark, and Latin-1.
 String _decodeText(List<int> bytes) {
-  try {
-    return utf8.decode(bytes);
-  } on FormatException {
-    return latin1.decode(bytes);
-  }
+  final decoded = codec.decodeText(bytes);
+  return switch (decoded.format.lineEnding) {
+    codec.LineEnding.crlf => decoded.text.replaceAll('\n', '\r\n'),
+    codec.LineEnding.mixed => [
+        for (var i = 0; i < decoded.mixed!.lines.length; i++)
+          decoded.mixed!.crlf[i]
+              ? '${decoded.mixed!.lines[i]}\r'
+              : decoded.mixed!.lines[i],
+      ].join('\n'),
+    _ => decoded.text,
+  };
 }
 
 /// Compares eight bytes at a time where the buffers allow it.
