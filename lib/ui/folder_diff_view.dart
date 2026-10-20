@@ -1,8 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
-import 'package:path/path.dart' as p;
 
 import '../compare/comparison.dart';
 import '../compare/folder_compare.dart';
+import '../settings/app_settings.dart';
 import '../theme.dart';
 import 'shell.dart';
 
@@ -20,10 +22,6 @@ class FolderDiffView extends StatefulWidget {
   final SourceSpec right;
   final VoidCallback? onBack;
 
-  /// The local roots. Only local folders are scanned so far.
-  String get leftRoot => (left as LocalSource).path;
-  String get rightRoot => (right as LocalSource).path;
-
   @override
   State<FolderDiffView> createState() => _FolderDiffViewState();
 }
@@ -31,7 +29,8 @@ class FolderDiffView extends StatefulWidget {
 class _FolderDiffViewState extends State<FolderDiffView> {
   CompareNode? _root;
   String? _error;
-  CompareProgress? _progress;
+  ScanProgress? _progress;
+  FolderScan? _scan;
   final Set<String> _expanded = {''};
   TreeFilter _filter = TreeFilter.changes;
   String _query = '';
@@ -42,24 +41,37 @@ class _FolderDiffViewState extends State<FolderDiffView> {
     _run();
   }
 
+  @override
+  void dispose() {
+    // Closing the tab stops the scan instead of letting it run on.
+    _scan?.cancel();
+    super.dispose();
+  }
+
   Future<void> _run() async {
     setState(() {
       _root = null;
       _error = null;
       _progress = null;
     });
+    _scan?.cancel();
+    final scan = _scan = FolderScan.start(
+      widget.left,
+      widget.right,
+      options: ScanOptions(
+        ignorePatterns: appSettings.ignorePatterns,
+        respectGitignore: appSettings.respectGitignore,
+        quick:
+            appSettings.folderCompareMethod == FolderCompareMethod.sizeAndDate,
+        compareOptions: appSettings.compareOptions,
+        caseSensitiveIgnore: !(Platform.isWindows || Platform.isMacOS),
+      ),
+      onProgress: (progress) {
+        if (mounted) setState(() => _progress = progress);
+      },
+    );
     try {
-      if (widget.left is! LocalSource || widget.right is! LocalSource) {
-        throw UnsupportedError(
-            'Only folders on this computer can be compared so far.');
-      }
-      final root = await compareFolders(
-        widget.leftRoot,
-        widget.rightRoot,
-        onProgress: (progress) {
-          if (mounted) setState(() => _progress = progress);
-        },
-      );
+      final root = (await scan.result).root;
       if (!mounted) return;
       setState(() {
         _root = root;
@@ -69,6 +81,8 @@ class _FolderDiffViewState extends State<FolderDiffView> {
           }
         }
       });
+    } on ScanCancelled {
+      return;
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
     }
@@ -129,7 +143,7 @@ class _FolderDiffViewState extends State<FolderDiffView> {
   void _openFile(CompareNode node) {
     // Pass both sides even when one is missing — the diff view can then
     // create the missing file on save.
-    final relative = p.split(node.relativePath).join('/');
+    final relative = node.relativePath;
     TabbedShellState.of(context).openComparison(
       FileComparison(
         widget.left.child(relative),
@@ -624,7 +638,7 @@ class _PathChip extends StatelessWidget {
 class _ScanningView extends StatelessWidget {
   const _ScanningView({this.progress});
 
-  final CompareProgress? progress;
+  final ScanProgress? progress;
 
   @override
   Widget build(BuildContext context) {
