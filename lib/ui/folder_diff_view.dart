@@ -1099,6 +1099,8 @@ class _FolderDiffViewState extends State<FolderDiffView> {
                         _tree.query = value;
                         _keepSelection();
                       }),
+                      // Enter hands the keyboard to the matches.
+                      onSubmitted: (_) => _treeFocus.requestFocus(),
                     ),
                   ),
                 ),
