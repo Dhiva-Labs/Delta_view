@@ -54,8 +54,10 @@ void main() {
     expect(plan.destructive, isTrue);
     expect(plan.targets, {Side.right});
 
-    final errors = await runSyncPlan(plan, left: l, right: r);
-    expect(errors, isEmpty);
+    final run = await runSyncPlan(plan, left: l, right: r);
+    expect(run.errors, isEmpty);
+    expect(run.stopped, isFalse);
+    expect(run.succeeded.length, plan.ops.length);
     final after = await _scan(l, r);
     expect(after.changedCount, 0, reason: 'right now matches left');
   });
@@ -147,21 +149,25 @@ void main() {
     final (l, _) = _sides();
     final r = MemorySource({}, writable: false);
     final plan = planSync(await _scan(l, r), SyncMode.mirrorLeftToRight);
-    final errors = await runSyncPlan(plan, left: l, right: r);
-    expect(errors.length, plan.ops.length);
-    expect(errors.first.message, contains('read-only'));
+    final run = await runSyncPlan(plan, left: l, right: r);
+    expect(run.errors.length, plan.ops.length);
+    expect(run.errors.first.message, contains('read-only'));
+    expect(run.succeeded, isEmpty);
   });
 
   test('progress is reported and cancel stops between steps', () async {
     final (l, r) = _sides();
     final plan = planSync(await _scan(l, r), SyncMode.mirrorLeftToRight);
     final seen = <SyncProgress>[];
-    await runSyncPlan(plan,
+    final run = await runSyncPlan(plan,
         left: l,
         right: r,
         onProgress: seen.add,
         isCancelled: () => seen.length >= 2);
     expect(seen.length, 3, reason: 'two steps, then the final report');
+    expect(run.attempted, 2);
+    expect(run.stopped, isTrue);
+    expect(seen.last.done, 2);
     expect(r.text('c.txt'), isNull, reason: 'the first steps ran');
     expect(r.text('b.txt'), isNull, reason: 'cancelled before copies');
   });

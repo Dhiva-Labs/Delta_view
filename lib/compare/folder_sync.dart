@@ -349,9 +349,31 @@ class SyncError {
   final String message;
 }
 
+/// How a run of a plan went.
+class SyncRun {
+  const SyncRun(this.plan, this.attempted, this.errors);
+
+  final SyncPlan plan;
+
+  /// Steps carried out or tried, in plan order, before the run ended.
+  final int attempted;
+
+  /// The steps that failed, with the reason.
+  final List<SyncError> errors;
+
+  /// Stopped before the last step.
+  bool get stopped => attempted < plan.ops.length;
+
+  /// Steps that ran and succeeded.
+  Iterable<SyncOp> get succeeded {
+    final failed = {for (final e in errors) e.op};
+    return plan.ops.take(attempted).where((op) => !failed.contains(op));
+  }
+}
+
 /// Carries out [plan]. A failed step is recorded and the rest still run.
 /// [isCancelled] is checked between steps.
-Future<List<SyncError>> runSyncPlan(
+Future<SyncRun> runSyncPlan(
   SyncPlan plan, {
   required FileSource left,
   required FileSource right,
@@ -362,8 +384,10 @@ Future<List<SyncError>> runSyncPlan(
   final errors = <SyncError>[];
   final totalBytes = plan.bytesToWrite;
   var bytesDone = 0;
+  var attempted = 0;
   for (var i = 0; i < plan.ops.length; i++) {
     if (isCancelled?.call() ?? false) break;
+    attempted++;
     final op = plan.ops[i];
     onProgress?.call(SyncProgress(
       done: i,
@@ -394,13 +418,13 @@ Future<List<SyncError>> runSyncPlan(
     }
   }
   onProgress?.call(SyncProgress(
-    done: plan.ops.length,
+    done: attempted,
     total: plan.ops.length,
-    bytesDone: totalBytes,
+    bytesDone: bytesDone,
     totalBytes: totalBytes,
     currentPath: '',
   ));
-  return errors;
+  return SyncRun(plan, attempted, errors);
 }
 
 /// Gives a copy its source's modification time when the target is on this
