@@ -9,17 +9,24 @@ Flutter for **Windows, Ubuntu, and macOS**.
 
 ## Features
 
-- **Folder compare** — recursive tree comparison with byte-accurate content
-  checks, run on a background isolate so huge trees never freeze the UI.
-  Live progress while scanning, per-directory change badges, filters
-  (changes / left only / right only), and name search.
-- **File compare** — side-by-side diff (Myers algorithm) with line numbers,
-  intra-line change highlighting, previous/next-change navigation, and a
-  clickable minimap of changes.
-- **Smooth UI** — Material 3, dark and light themes, animated transitions,
-  virtualised lists that stay fluid on large diffs.
-- Binary files and files over 8 MB are detected and reported instead of
-  producing a garbage diff.
+- **Folder compare**: a recursive dual-pane tree, scanned in the background
+  and cancellable, with filters, sorting, keyboard navigation, ignore
+  patterns and `.gitignore` support, quick compare by size and date, folder
+  sync with a preview of every step, and HTML/CSV reports.
+- **File compare**: a Meld-style side-by-side diff with intra-line
+  highlights, syntax highlighting, word wrap or horizontal scrolling,
+  hidden unchanged runs, find, a minimap, and compare rules (whitespace,
+  case, line endings, blank lines). Copy changes across or edit in place,
+  with undo. Encoding and line endings are kept on save.
+- **Three-way merge**: Left | Merged | Right, with clean changes merged up
+  front and every conflict one key away. Works as `git mergetool`.
+- **Images**: side by side, swipe, onion skin and pixel difference.
+- **JSON, YAML, CSV**: compared by structure, so reordering is not a change.
+- **Anywhere**: local folders, zip and tar archives, and SFTP servers (host
+  keys confirmed by you), plus pasted text.
+- **Yours to tune**: themes, accent colour, colour-blind-safe diff colours,
+  editor font and size, density, and rebindable shortcuts (Ctrl+/ lists
+  them). Recent comparisons, open tabs and the window are remembered.
 
 ## Install
 
@@ -46,6 +53,16 @@ push.
 flutter run -d linux    # or -d windows / -d macos
 ```
 
+From a terminal or as a git tool:
+
+```sh
+delta-view LEFT RIGHT                                  # two folders or two files
+delta-view --merge LOCAL BASE REMOTE --output MERGED   # three-way merge
+```
+
+[docs/command-line.md](docs/command-line.md) shows the `git difftool` and
+`git mergetool` setup and the file manager script.
+
 ## Build a release
 
 ```sh
@@ -66,13 +83,20 @@ pwsh packaging/windows/build_installer.ps1            # Windows installer (needs
 flutter test
 ```
 
-Covers the Myers diff engine (round-trip correctness, intra-line spans,
-change-block tracking) and the folder scanner (identical / modified /
-one-sided classification).
+Covers the diff and merge engines, text encodings, folding and patches, the
+folder scanner, ignore rules, sync planning and reports, archive and SFTP
+sources, structured and image diffs, command-line parsing, settings and
+sessions, plus widget tests of the main views.
 
 ## Layout
 
-- `lib/diff/line_diff.dart` — Myers line diff + side-by-side row builder
-- `lib/compare/folder_compare.dart` — recursive folder scan in an isolate
-- `lib/ui/` — home, folder tree, and file diff screens
-- `lib/theme.dart` — app theme and diff colour palette
+- `lib/compare/` — comparisons, sources (local, archive, SFTP), folder scan,
+  ignore rules, sync and reports
+- `lib/diff/` — Myers diff, compare rules, text codec, folding, patches
+- `lib/merge/` — three-way merge engine
+- `lib/remote/` — known hosts, saved connections, credential cache
+- `lib/settings/` — persisted preferences and session state
+- `lib/ui/` — shell and tabs, home, settings, and the folder, file, merge,
+  image and structured views
+- `lib/cli/` — command-line parsing
+- `assets/brand/` — the app icon sources
