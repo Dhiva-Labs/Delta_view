@@ -67,6 +67,30 @@ class CompareOptions {
 
   static final _whitespaceRun = RegExp(r'\s+');
 
+  /// Whether [line] drops out of the comparison under [ignoreBlankLines].
+  bool isIgnoredBlank(String line) =>
+      ignoreBlankLines && normalize(line).trim().isEmpty;
+
+  /// The rules that are switched on, in a few words each, e.g.
+  /// `['trailing whitespace', 'case']`. Empty when nothing is ignored.
+  List<String> get ignoredParts => [
+        switch (whitespace) {
+          WhitespaceMode.exact => null,
+          WhitespaceMode.trailing => 'trailing whitespace',
+          WhitespaceMode.changes => 'whitespace changes',
+          WhitespaceMode.all => 'all whitespace',
+        },
+        if (ignoreCase) 'case',
+        if (ignoreLineEndings) 'line endings',
+        if (ignoreBlankLines) 'blank lines',
+      ].nonNulls.toList();
+
+  /// One short line for status bars, e.g. `Ignoring case, line endings`.
+  String get summary {
+    final parts = ignoredParts;
+    return parts.isEmpty ? 'Exact compare' : 'Ignoring ${parts.join(', ')}';
+  }
+
   CompareOptions copyWith({
     WhitespaceMode? whitespace,
     bool? ignoreCase,
