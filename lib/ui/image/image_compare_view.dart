@@ -106,7 +106,9 @@ class _ImageCompareViewState extends State<ImageCompareView> {
   /// for an older tolerance or alignment are dropped.
   int _generation = 0;
 
-  Offset? _hover;
+  /// The canvas pixel under the mouse. A notifier, so moving the mouse
+  /// repaints the status bar alone, not the whole view.
+  final _hover = ValueNotifier<Offset?>(null);
   final _viewport = ImageViewport();
   final _focus = FocusNode(debugLabel: 'image compare');
 
@@ -125,6 +127,7 @@ class _ImageCompareViewState extends State<ImageCompareView> {
     _maskTimer?.cancel();
     _disposeImages();
     _viewport.dispose();
+    _hover.dispose();
     _focus.dispose();
     super.dispose();
   }
@@ -328,7 +331,11 @@ class _ImageCompareViewState extends State<ImageCompareView> {
                 child: _body(context, left.image!, right.image!),
               ),
             ),
-            _statusBar(context, left, right),
+            ValueListenableBuilder<Offset?>(
+              valueListenable: _hover,
+              builder: (context, hover, _) =>
+                  _statusBar(context, left, right, hover),
+            ),
           ],
         ),
       ),
@@ -560,7 +567,7 @@ class _ImageCompareViewState extends State<ImageCompareView> {
     final scheme = Theme.of(context).colorScheme;
     final lo = _origin(left), ro = _origin(right);
     final content = _viewport.contentSize;
-    void hover(Offset? p) => setState(() => _hover = p);
+    void hover(Offset? p) => _hover.value = p;
 
     switch (_mode) {
       case ImageCompareMode.sideBySide:
@@ -693,11 +700,11 @@ class _ImageCompareViewState extends State<ImageCompareView> {
     }
   }
 
-  Widget _statusBar(BuildContext context, _ImageSide left, _ImageSide right) {
+  Widget _statusBar(
+      BuildContext context, _ImageSide left, _ImageSide right, Offset? hover) {
     final scheme = Theme.of(context).colorScheme;
     final style =
         monoStyle.copyWith(fontSize: 11.5, color: scheme.onSurfaceVariant);
-    final hover = _hover;
     String text = 'Scroll to zoom · drag to pan · '
         '${AppAction.zoomReset.keyLabel} fits · point at a pixel to read it';
     if (hover != null) {

@@ -215,81 +215,95 @@ class _TableDiffPanelState extends State<TableDiffPanel> {
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
       child: Row(
         children: [
-          FilterChip(
-            label: const Text('Header row'),
-            tooltip: 'The first row names the columns',
-            selected: options.header,
-            visualDensity: VisualDensity.compact,
-            onSelected: (v) =>
-                widget.onOptionsChanged(options.copyWith(header: v)),
-          ),
-          const SizedBox(width: 8),
-          Text('Match rows by', style: small),
-          const SizedBox(width: 6),
-          PopupMenuButton<int>(
-            tooltip: 'The column that identifies a row',
-            onSelected: (c) =>
-                widget.onOptionsChanged(options.copyWith(keyColumn: c)),
-            itemBuilder: (context) => [
-              for (var c = 0; c < diff.columns.length; c++)
-                CheckedPopupMenuItem(
-                  value: c,
-                  checked: c == diff.keyColumn,
-                  child: Text(diff.columns[c]),
-                ),
-            ],
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: scheme.outlineVariant),
-              ),
+          // On a narrow window the options scroll rather than overflow.
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
               child: Row(
-                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.key, size: 14, color: scheme.primary),
+                  FilterChip(
+                    label: const Text('Header row'),
+                    tooltip: 'The first row names the columns',
+                    selected: options.header,
+                    visualDensity: VisualDensity.compact,
+                    onSelected: (v) =>
+                        widget.onOptionsChanged(options.copyWith(header: v)),
+                  ),
+                  const SizedBox(width: 8),
+                  Text('Match rows by', style: small),
                   const SizedBox(width: 6),
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 160),
-                    child: Text(
-                      diff.columns.isEmpty ? '—' : diff.columns[diff.keyColumn],
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12.5),
+                  PopupMenuButton<int>(
+                    tooltip: 'The column that identifies a row',
+                    onSelected: (c) =>
+                        widget.onOptionsChanged(options.copyWith(keyColumn: c)),
+                    itemBuilder: (context) => [
+                      for (var c = 0; c < diff.columns.length; c++)
+                        CheckedPopupMenuItem(
+                          value: c,
+                          checked: c == diff.keyColumn,
+                          child: Text(diff.columns[c]),
+                        ),
+                    ],
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: scheme.outlineVariant),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.key, size: 14, color: scheme.primary),
+                          const SizedBox(width: 6),
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 160),
+                            child: Text(
+                              diff.columns.isEmpty
+                                  ? '—'
+                                  : diff.columns[diff.keyColumn],
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 12.5),
+                            ),
+                          ),
+                          const Icon(Icons.arrow_drop_down, size: 18),
+                        ],
+                      ),
                     ),
                   ),
-                  const Icon(Icons.arrow_drop_down, size: 18),
+                  const SizedBox(width: 8),
+                  FilterChip(
+                    label: const Text('Changes only'),
+                    selected: _changesOnly,
+                    visualDensity: VisualDensity.compact,
+                    onSelected: (v) => setState(() {
+                      _changesOnly = v;
+                      _prepare();
+                    }),
+                  ),
+                  const SizedBox(width: 14),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 420),
+                    child: Text(
+                      [
+                        if (cells > 0)
+                          '$cells ${cells == 1 ? 'cell' : 'cells'} changed',
+                        if (columnsAdded > 0) '+$columnsAdded columns',
+                        if (columnsRemoved > 0) '−$columnsRemoved columns',
+                        _rowsTheSame(diff.count(RowStatus.same)),
+                      ].join('  ·  '),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: small.copyWith(
+                          color: cells > 0
+                              ? palette.modified
+                              : scheme.onSurfaceVariant),
+                    ),
+                  ),
                 ],
               ),
             ),
           ),
-          const SizedBox(width: 8),
-          FilterChip(
-            label: const Text('Changes only'),
-            selected: _changesOnly,
-            visualDensity: VisualDensity.compact,
-            onSelected: (v) => setState(() {
-              _changesOnly = v;
-              _prepare();
-            }),
-          ),
-          const SizedBox(width: 14),
-          Flexible(
-            child: Text(
-              [
-                if (cells > 0)
-                  '$cells ${cells == 1 ? 'cell' : 'cells'} changed',
-                if (columnsAdded > 0) '+$columnsAdded columns',
-                if (columnsRemoved > 0) '−$columnsRemoved columns',
-                _rowsTheSame(diff.count(RowStatus.same)),
-              ].join('  ·  '),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: small.copyWith(
-                  color:
-                      cells > 0 ? palette.modified : scheme.onSurfaceVariant),
-            ),
-          ),
-          const Spacer(),
           if (targets.isNotEmpty) ...[
             Text(
               position < 0

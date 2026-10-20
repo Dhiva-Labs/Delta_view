@@ -304,62 +304,74 @@ class _TreeDiffPanelState extends State<TreeDiffPanel> {
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
       child: Row(
         children: [
-          FilterChip(
-            label: const Text('Changes only'),
-            selected: _changesOnly,
-            visualDensity: VisualDensity.compact,
-            onSelected: (v) => setState(() {
-              _changesOnly = v;
-              _rows = null;
-            }),
-          ),
-          const SizedBox(width: 6),
-          IconButton(
-            tooltip: 'Expand all',
-            visualDensity: VisualDensity.compact,
-            onPressed: () => _setAllExpanded(true),
-            icon: const Icon(Icons.unfold_more, size: 19),
-          ),
-          IconButton(
-            tooltip: 'Collapse all',
-            visualDensity: VisualDensity.compact,
-            onPressed: () => _setAllExpanded(false),
-            icon: const Icon(Icons.unfold_less, size: 19),
-          ),
-          const SizedBox(width: 12),
-          Text('Arrays', style: small),
-          const SizedBox(width: 8),
-          SegmentedButton<bool>(
-            showSelectedIcon: false,
-            style:
-                SegmentedButton.styleFrom(visualDensity: VisualDensity.compact),
-            segments: const [
-              ButtonSegment(
-                value: false,
-                label: Text('By position'),
-                tooltip: 'Element 0 matches element 0, and so on',
+          // On a narrow window the options scroll rather than overflow.
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  FilterChip(
+                    label: const Text('Changes only'),
+                    selected: _changesOnly,
+                    visualDensity: VisualDensity.compact,
+                    onSelected: (v) => setState(() {
+                      _changesOnly = v;
+                      _rows = null;
+                    }),
+                  ),
+                  const SizedBox(width: 6),
+                  IconButton(
+                    tooltip: 'Expand all',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => _setAllExpanded(true),
+                    icon: const Icon(Icons.unfold_more, size: 19),
+                  ),
+                  IconButton(
+                    tooltip: 'Collapse all',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => _setAllExpanded(false),
+                    icon: const Icon(Icons.unfold_less, size: 19),
+                  ),
+                  const SizedBox(width: 12),
+                  Text('Arrays', style: small),
+                  const SizedBox(width: 8),
+                  SegmentedButton<bool>(
+                    showSelectedIcon: false,
+                    style: SegmentedButton.styleFrom(
+                        visualDensity: VisualDensity.compact),
+                    segments: const [
+                      ButtonSegment(
+                        value: false,
+                        label: Text('By position'),
+                        tooltip: 'Element 0 matches element 0, and so on',
+                      ),
+                      ButtonSegment(
+                        value: true,
+                        label: Text('By key'),
+                        tooltip: 'Match objects in arrays by an id-like key, '
+                            'wherever they moved',
+                      ),
+                    ],
+                    selected: {options.matchArraysByKey},
+                    onSelectionChanged: (s) => widget.onOptionsChanged(
+                        TreeDiffOptions(
+                            matchArraysByKey: s.first,
+                            arrayKey: options.arrayKey)),
+                  ),
+                  if (options.matchArraysByKey) ...[
+                    const SizedBox(width: 6),
+                    _KeyPicker(
+                      value: options.arrayKey,
+                      used: used,
+                      onChanged: (key) => widget.onOptionsChanged(
+                          TreeDiffOptions(
+                              matchArraysByKey: true, arrayKey: key)),
+                    ),
+                  ],
+                ],
               ),
-              ButtonSegment(
-                value: true,
-                label: Text('By key'),
-                tooltip: 'Match objects in arrays by an id-like key, '
-                    'wherever they moved',
-              ),
-            ],
-            selected: {options.matchArraysByKey},
-            onSelectionChanged: (s) => widget.onOptionsChanged(TreeDiffOptions(
-                matchArraysByKey: s.first, arrayKey: options.arrayKey)),
-          ),
-          if (options.matchArraysByKey) ...[
-            const SizedBox(width: 6),
-            _KeyPicker(
-              value: options.arrayKey,
-              used: used,
-              onChanged: (key) => widget.onOptionsChanged(
-                  TreeDiffOptions(matchArraysByKey: true, arrayKey: key)),
             ),
-          ],
-          const Spacer(),
+          ),
           if (_targets.isNotEmpty) ...[
             Text(
               current < 0
