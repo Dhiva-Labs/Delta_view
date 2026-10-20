@@ -50,7 +50,7 @@ Widget buildComparisonView(Comparison comparison, {VoidCallback? onBack}) {
         left: DiffSide.memory(text: c.leftText, label: c.leftLabel),
         right: DiffSide.memory(text: c.rightText, label: c.rightLabel),
         title: c.title,
-        startEditing: c.leftText.isEmpty && c.rightText.isEmpty,
+        startEditing: c.leftText.isEmpty || c.rightText.isEmpty,
         onBack: onBack,
       );
     case ThreeWayComparison c:

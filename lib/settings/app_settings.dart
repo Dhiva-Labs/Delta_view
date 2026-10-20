@@ -222,12 +222,28 @@ class AppSettings extends ChangeNotifier {
     }
   }
 
+  /// The write in progress, so a timer-fired save and the save on quit
+  /// never race for the same temporary file.
+  Future<void>? _writing;
+
   /// Writes settings now (also called on app exit).
   Future<void> flush() async {
     _saveTimer?.cancel();
     _saveTimer = null;
     final file = _file;
     if (file == null) return;
+    while (_writing != null) {
+      await _writing;
+    }
+    final write = _writing = _write(file);
+    try {
+      await write;
+    } finally {
+      if (identical(_writing, write)) _writing = null;
+    }
+  }
+
+  Future<void> _write(File file) async {
     try {
       await file.parent.create(recursive: true);
       final tmp = File('${file.path}.tmp');

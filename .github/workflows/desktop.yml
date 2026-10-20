@@ -132,7 +132,7 @@ jobs:
           delta-view > "$log" 2>&1 &
           pid=$!
           for i in $(seq 1 90); do
-            if xdotool search --name 'delta_view' > /dev/null 2>&1 \
+            if xdotool search --class 'delta_view' > /dev/null 2>&1 \
                && grep -q 'libapp.so' "/proc/$pid/maps"; then
               echo "delta_view is up after ${i}s: window shown, AOT snapshot mapped:"
               grep 'libapp.so' "/proc/$pid/maps" | head -1
