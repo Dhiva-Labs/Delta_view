@@ -111,6 +111,9 @@ done
 
 find "$PKG/opt" "$PKG/usr" -type d -exec chmod 0755 {} \;
 find "$PKG/usr/share/icons" -type f -exec chmod 0644 {} \;
+# Nothing in the package should be writable by group or others.
+chmod 0755 "$PKG"
+find "$PKG/opt" "$PKG/usr" -type f -exec chmod go-w {} +
 chmod 0755 "$PKG/opt/delta_view/delta_view"
 chmod 0755 "$PKG/opt/delta_view/extras/compare-with-deltaview"
 
