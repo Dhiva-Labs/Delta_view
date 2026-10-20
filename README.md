@@ -27,13 +27,13 @@ Every release carries the Linux and Windows builds for x64 and arm64:
 
 | Platform | Architecture | Asset |
 |---|---|---|
-| Linux (Debian, Ubuntu) | x64 | `delta-view_1.0.0_amd64.deb` |
-| Linux (Debian, Ubuntu) | arm64 | `delta-view_1.0.0_arm64.deb` |
+| Linux (Debian, Ubuntu) | x64 | `delta-view_<version>_amd64.deb` |
+| Linux (Debian, Ubuntu) | arm64 | `delta-view_<version>_arm64.deb` |
 | Windows | x64 | `DeltaView-<version>-windows-x64-setup.exe` |
 | Windows | arm64 | `DeltaView-<version>-windows-arm64-setup.exe` |
 
 ```sh
-sudo apt install ./delta-view_1.0.0_arm64.deb   # or _amd64.deb
+sudo apt install ./delta-view_<version>_arm64.deb   # or _amd64.deb
 ```
 
 The [Desktop builds](.github/workflows/desktop.yml) workflow builds, tests,
