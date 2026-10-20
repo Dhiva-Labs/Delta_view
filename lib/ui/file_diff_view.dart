@@ -1,17 +1,42 @@
-import 'dart:async';
-import 'dart:convert';
-import 'dart:isolate';
-import 'dart:math' as math;
+/// Two-way text comparison, Meld-style: aligned rows with folding, wrap
+/// and syntax colours in view mode; two editors with aligned scrolling in
+/// edit mode; copying changes across in either, with undo; and saving in
+/// the encoding and line endings each file came with.
+///
+/// The pieces live in file_diff/: [DiffSession] holds the texts, diff,
+/// history and search; [DiffRowsView] and [DiffEditorsView] draw the two
+/// modes; this widget is the toolbar, headers, status bar and the glue.
+library;
 
+import 'dart:async';
+import 'dart:io';
+
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
+
 import '../compare/diff_side.dart';
 import '../diff/line_diff.dart';
+import '../diff/unified_diff.dart';
+import '../settings/app_settings.dart';
 import '../theme.dart';
+import 'file_diff/connector_gutter.dart';
+import 'file_diff/dialogs.dart';
+import 'file_diff/diff_session.dart';
+import 'file_diff/editors_view.dart';
+import 'file_diff/find_bar.dart';
+import 'file_diff/line_layout.dart';
+import 'file_diff/minimap.dart';
+import 'file_diff/rows_view.dart';
+import 'file_diff/rules_menu.dart';
+import 'file_diff/status_bar.dart';
+import 'file_diff/viewport.dart';
 import 'shell.dart';
+import 'shortcuts/app_shortcuts.dart';
 
-const _maxDiffBytes = 8 * 1024 * 1024;
-const _rowExtent = 22.0;
+/// The text size "Reset text size" returns to: the settings default.
+final _defaultFontSize = AppSettings().editorFontSize;
 
 class FileDiffView extends StatefulWidget {
   const FileDiffView({
@@ -36,493 +61,1130 @@ class FileDiffView extends StatefulWidget {
 }
 
 class _FileDiffViewState extends State<FileDiffView> {
-  DiffResult? _result;
-  String? _notice;
-  String? _error;
-  bool _loaded = false;
+  late final DiffSession _session = DiffSession(widget.left, widget.right,
+      options: appSettings.compareOptions);
   late bool _editing = widget.startEditing;
+
+  /// The change last jumped to or clicked, or -1.
   int _currentBlock = -1;
 
-  final _viewScroll = ScrollController();
-  final _leftEditScroll = ScrollController();
-  final _rightEditScroll = ScrollController();
-  bool _syncingScroll = false;
+  final _rowsKey = GlobalKey<DiffRowsViewState>();
+  final _editorsKey = GlobalKey<DiffEditorsViewState>();
+  final _rowsScroll = ScrollController();
+  final _editScrolls = [ScrollController(), ScrollController()];
+  final _viewFocus = FocusNode(debugLabel: 'file diff view');
+  final _findFocus = FocusNode(debugLabel: 'find in files');
+  bool _findOpen = false;
+  String _lastQuery = '';
 
-  late final _DiffEditingController _leftController;
-  late final _DiffEditingController _rightController;
-  String _savedLeft = '';
-  String _savedRight = '';
-  bool _leftExists = true;
-  bool _rightExists = true;
-  Timer? _debounce;
-  (String, String)? _lastDiffed;
+  /// Caret of the focused editor: (side, line, column), all 0-based.
+  final _cursor = ValueNotifier<(int, int, int)?>(null);
+  int _lastFocusedSide = 0;
 
-  bool get _leftDirty => _leftController.text != _savedLeft;
-  bool get _rightDirty => _rightController.text != _savedRight;
+  /// Ticks when the panes have laid out lines anew, so what depends on
+  /// their positions (previous / next, "change N of M") updates.
+  final _layoutTick = ValueNotifier<int>(0);
+  void _onLayout() => _layoutTick.value++;
+
+  int? _flashRow;
+  Timer? _flashTimer;
+
+  TabHandle? _tab;
+  bool _reportedDirty = false;
+
+  DiffViewport? get _viewport =>
+      _editing ? _editorsKey.currentState : _rowsKey.currentState;
+
+  List<SideModel> get _sides => _session.sides;
 
   @override
   void initState() {
     super.initState();
-    _leftController = _DiffEditingController();
-    _rightController = _DiffEditingController();
-    _leftController.addListener(_scheduleRediff);
-    _rightController.addListener(_scheduleRediff);
-    _leftEditScroll.addListener(() => _syncScroll(_leftEditScroll,
-        _rightEditScroll));
-    _rightEditScroll.addListener(() => _syncScroll(_rightEditScroll,
-        _leftEditScroll));
+    _session
+      ..addListener(_onSession)
+      ..onNotify = _toast;
+    appSettings.addListener(_onSettings);
+    for (var i = 0; i < 2; i++) {
+      final side = _sides[i];
+      side.controller.addListener(() => _updateCursor(i));
+      side.focusNode.addListener(() {
+        if (side.focusNode.hasFocus) _lastFocusedSide = i;
+        _updateCursor(i);
+      });
+    }
     _load();
+  }
+
+  Future<void> _load() async {
+    await _session.load();
+    if (!mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (_editing) {
+        _sides[0].focusNode.requestFocus();
+      } else {
+        _focusView();
+      }
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _tab ??= TabScope.maybeOf(context);
   }
 
   @override
   void dispose() {
-    _debounce?.cancel();
-    _viewScroll.dispose();
-    _leftEditScroll.dispose();
-    _rightEditScroll.dispose();
-    _leftController.dispose();
-    _rightController.dispose();
+    _tab?.setCloseGuard(null);
+    if (_reportedDirty) {
+      // The tab may stay open (back to the picker); it is no longer dirty.
+      // Not now: the shell cannot rebuild while this tree is torn down.
+      final tab = _tab;
+      WidgetsBinding.instance.addPostFrameCallback((_) => tab?.setDirty(false));
+    }
+    appSettings.removeListener(_onSettings);
+    _session
+      ..removeListener(_onSession)
+      ..dispose();
+    _rowsScroll.dispose();
+    for (final s in _editScrolls) {
+      s.dispose();
+    }
+    _viewFocus.dispose();
+    _findFocus.dispose();
+    _cursor.dispose();
+    _layoutTick.dispose();
+    _flashTimer?.cancel();
     super.dispose();
   }
 
-  void _syncScroll(ScrollController from, ScrollController to) {
-    if (_syncingScroll || !from.hasClients || !to.hasClients) return;
-    _syncingScroll = true;
-    final fromMax = from.position.maxScrollExtent;
-    final fraction = fromMax == 0 ? 0.0 : from.offset / fromMax;
-    to.jumpTo(fraction * to.position.maxScrollExtent);
-    _syncingScroll = false;
-  }
-
-  Future<void> _load() async {
-    try {
-      final left = await _readSide(widget.left);
-      final right = await _readSide(widget.right);
-
-      if (left.binary || right.binary) {
-        setState(() => _notice = 'Binary files — no text diff available.');
-        return;
-      }
-      if (left.tooLarge || right.tooLarge) {
-        setState(() =>
-            _notice = 'File is larger than 8 MB — text diff is disabled.');
-        return;
-      }
-
-      _leftExists = left.exists;
-      _rightExists = right.exists;
-      _savedLeft = left.text ?? '';
-      _savedRight = right.text ?? '';
-      _leftController.text = _savedLeft;
-      _rightController.text = _savedRight;
-
-      final result = await _diffInIsolate(_savedLeft, _savedRight);
-      if (!mounted) return;
-      setState(() {
-        _result = result;
-        _loaded = true;
-        _applyLineKinds(result);
-        _lastDiffed = (_savedLeft, _savedRight);
-      });
-    } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
-    }
-  }
-
-  /// Static so the isolate closure captures only the two strings. A closure
-  /// created inside a State method drags `this` (and with it the whole
-  /// widget tree) into the isolate message, which is unsendable.
-  static Future<DiffResult> _diffInIsolate(String left, String right) {
-    return Isolate.run(() => buildSideBySide(left, right));
-  }
-
-  Future<_SideContent> _readSide(DiffSide side) async {
-    if (side.isMemory) return _SideContent(text: side.initialText ?? '');
-    final bytes = await side.read();
-    if (bytes == null) return const _SideContent(exists: false);
-    if (bytes.length > _maxDiffBytes) return const _SideContent(tooLarge: true);
-    final probe = math.min(bytes.length, 8192);
-    for (var i = 0; i < probe; i++) {
-      if (bytes[i] == 0) return const _SideContent(binary: true);
-    }
-    String text;
-    try {
-      text = utf8.decode(bytes);
-    } on FormatException {
-      text = latin1.decode(bytes);
-    }
-    return _SideContent(text: text);
-  }
-
-  void _scheduleRediff() {
-    if (!_loaded) return;
-    _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 250), _rediff);
-    // Repaint save-button enabled state immediately.
-    if (mounted) setState(() {});
-    TabScope.maybeOf(context)?.setDirty(_leftDirty || _rightDirty);
-  }
-
-  Future<void> _rediff() async {
-    final left = _leftController.text;
-    final right = _rightController.text;
-    if (_lastDiffed == (left, right)) return;
-    _lastDiffed = (left, right);
-    final result = (left.length + right.length) > 200 * 1024
-        ? await _diffInIsolate(left, right)
-        : buildSideBySide(left, right);
+  void _onSession() {
     if (!mounted) return;
-    // Ignore stale results if the text changed while we were diffing.
-    if (_leftController.text != left || _rightController.text != right) return;
-    setState(() {
-      _result = result;
-      _currentBlock = -1;
-      _applyLineKinds(result);
-    });
-  }
-
-  /// Feeds per-line diff kinds into the edit controllers so the editors
-  /// paint added / removed / modified line backgrounds live.
-  void _applyLineKinds(DiffResult result) {
-    final palette = DiffPalette.of(context);
-    final leftKinds = <DiffRowKind?>[];
-    final rightKinds = <DiffRowKind?>[];
-    for (final row in result.rows) {
-      if (row.leftNumber != null) {
-        _setAt(leftKinds, row.leftNumber! - 1,
-            row.kind == DiffRowKind.same ? null : row.kind);
-      }
-      if (row.rightNumber != null) {
-        _setAt(rightKinds, row.rightNumber! - 1,
-            row.kind == DiffRowKind.same ? null : row.kind);
-      }
+    final dirty = _session.dirty;
+    if (dirty != _reportedDirty) {
+      _reportedDirty = dirty;
+      _tab?.setDirty(dirty);
+      // Guard only while there is something to lose, so quitting does not
+      // stop at every clean tab.
+      _tab?.setCloseGuard(dirty ? _confirmClose : null);
     }
-    _leftController.setHighlights(leftKinds, {
-      DiffRowKind.removed: palette.removedBg,
-      DiffRowKind.modified: palette.modifiedBg,
-      DiffRowKind.added: palette.addedBg,
-    });
-    _rightController.setHighlights(rightKinds, {
-      DiffRowKind.added: palette.addedBg,
-      DiffRowKind.modified: palette.modifiedBg,
-      DiffRowKind.removed: palette.removedBg,
-    });
-  }
-
-  static void _setAt(List<DiffRowKind?> list, int index, DiffRowKind? value) {
-    while (list.length <= index) {
-      list.add(null);
+    if (_currentBlock >= _session.blocks.length) {
+      _currentBlock = _session.blocks.length - 1;
     }
-    list[index] = value;
+    setState(() {});
   }
 
-  Future<void> _save({required bool left, required bool right}) async {
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      final saved = <String>[];
-      if (left && _leftDirty && !widget.left.isMemory) {
-        await widget.left.write(utf8.encode(_leftController.text));
-        _savedLeft = _leftController.text;
-        _leftExists = true;
-        saved.add(widget.left.label);
+  void _onSettings() {
+    if (!mounted) return;
+    if (!_session.optionsOverridden &&
+        _session.options != appSettings.compareOptions) {
+      _session.setOptions(appSettings.compareOptions, overridden: false);
+    }
+    setState(() {});
+  }
+
+  void _updateCursor(int side) {
+    final model = _sides[side];
+    if (!_editing || !model.focusNode.hasFocus) {
+      if (_cursor.value?.$1 == side && !model.focusNode.hasFocus) {
+        _cursor.value = null;
       }
-      if (right && _rightDirty && !widget.right.isMemory) {
-        await widget.right.write(utf8.encode(_rightController.text));
-        _savedRight = _rightController.text;
-        _rightExists = true;
-        saved.add(widget.right.label);
-      }
-      if (saved.isEmpty) return;
-      if (mounted) {
-        setState(() {});
-        TabScope.maybeOf(context)?.setDirty(_leftDirty || _rightDirty);
-      }
-      messenger.showSnackBar(SnackBar(
-        content: Text('Saved ${saved.join(' and ')}'),
+      return;
+    }
+    final offset = model.controller.selection.extentOffset;
+    if (offset < 0) return;
+    final line = _session.lineAt(side, offset);
+    final starts = _session.lineStarts(side);
+    final start = line < starts.length ? starts[line] : model.text.length;
+    _cursor.value = (side, line, offset - start);
+  }
+
+  void _toast(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(message),
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 2),
+        width: 420,
       ));
-    } catch (e) {
-      messenger.showSnackBar(SnackBar(
-        content: Text('Save failed: $e'),
-        behavior: SnackBarBehavior.floating,
-      ));
+  }
+
+  void _focusView() {
+    if (!_viewFocus.hasFocus) _viewFocus.requestFocus();
+  }
+
+  // ---- navigation ----
+
+  void _step(int direction) {
+    final viewport = _viewport;
+    if (viewport == null) return;
+    final next = neighbourBlock(
+        viewport, _session.blocks.length, _currentBlock, direction);
+    if (next == null) return;
+    setState(() => _currentBlock = next);
+    viewport.revealBlock(next);
+  }
+
+  void _onRowTap(int row) {
+    _focusView();
+    final blocks = _session.blocks;
+    final i = blocks.indexWhere((b) => b.containsRow(row));
+    if (i >= 0 && i != _currentBlock) setState(() => _currentBlock = i);
+  }
+
+  /// The block keyboard copy acts on: the one under the caret in edit
+  /// mode, else the current one while on screen, else the first visible.
+  int? _targetBlock() {
+    if (_editing) {
+      final atCursor = _editorsKey.currentState?.blockAtCursor();
+      if (atCursor != null) return atCursor;
+    }
+    final viewport = _viewport;
+    final count = _session.blocks.length;
+    if (viewport == null || count == 0) return null;
+    final top = viewport.scrollTop, bottom = top + viewport.viewHeight;
+    bool onScreen(int i) {
+      final y = viewport.blockTop(i);
+      return y >= top - 1 && y <= bottom;
+    }
+
+    if (_currentBlock >= 0 &&
+        _currentBlock < count &&
+        onScreen(_currentBlock)) {
+      return _currentBlock;
+    }
+    for (var i = 0; i < count; i++) {
+      if (onScreen(i)) return i;
+      if (viewport.blockTop(i) > bottom) break;
+    }
+    return null;
+  }
+
+  Future<void> _copy(int index, {required bool toRight}) async {
+    if (await _session.copyBlock(index, toRight: toRight) && mounted) {
+      // The copied change is gone; the index now names the next one.
+      setState(() =>
+          _currentBlock = index.clamp(-1, _session.blocks.length - 1).toInt());
     }
   }
 
-  void _jumpToBlock(int direction) {
-    final result = _result;
-    if (result == null || result.changeBlocks.isEmpty) return;
-    var next = _currentBlock + direction;
-    next = next.clamp(0, result.changeBlocks.length - 1);
-    setState(() => _currentBlock = next);
-    _jumpToRow(result.changeBlocks[next]);
+  Future<void> _delete(int index, {required bool left}) async {
+    await _session.deleteBlock(index, left: left);
   }
 
-  void _jumpToRow(int rowIndex) {
-    if (!_viewScroll.hasClients) return;
-    final target = math.max(0.0, rowIndex * _rowExtent - 120);
-    _viewScroll.animateTo(
-      math.min(target, _viewScroll.position.maxScrollExtent),
-      duration: const Duration(milliseconds: 260),
-      curve: Curves.easeOutCubic,
+  void _copyCurrent({required bool toRight}) {
+    final target = _targetBlock();
+    if (target != null) _copy(target, toRight: toRight);
+  }
+
+  // ---- edit / view ----
+
+  void _setEditing(bool editing) {
+    if (editing == _editing) return;
+    // Keep the same lines in view across the switch.
+    int? leftLine;
+    if (_editing) {
+      leftLine = _editorsKey.currentState?.topLine(0).floor();
+    } else {
+      final rows = _rowsKey.currentState;
+      if (rows != null) leftLine = _leftLineAtRow(rows.topRow);
+    }
+    setState(() => _editing = editing);
+    _cursor.value = null;
+    if (!editing) _session.rediff();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || leftLine == null) return;
+      if (editing) {
+        _editorsKey.currentState
+            ?.revealLine(0, leftLine, animate: false, margin: 0);
+      } else {
+        final rowOf = _session.rowOfLine[0];
+        if (leftLine < rowOf.length) {
+          _rowsKey.currentState
+              ?.revealRow(rowOf[leftLine], animate: false, margin: 0);
+        }
+        _focusView();
+      }
+    });
+  }
+
+  /// The left line shown at [row], or the next one down.
+  int _leftLineAtRow(int row) {
+    final rows = _session.result?.rows ?? const <DiffRow>[];
+    for (var i = row; i < rows.length; i++) {
+      final n = rows[i].leftNumber;
+      if (n != null) return n - 1;
+    }
+    return 0;
+  }
+
+  /// Runs [change] (which re-lays out the text) keeping the line at the
+  /// top in place.
+  void _keepPosition(VoidCallback change) {
+    final editing = _editing;
+    final top = editing
+        ? _editorsKey.currentState?.topLine(0).floor()
+        : _rowsKey.currentState?.topRow;
+    change();
+    if (top == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || editing != _editing) return;
+      if (editing) {
+        _editorsKey.currentState?.revealLine(0, top, animate: false, margin: 0);
+      } else {
+        _rowsKey.currentState?.revealRow(top, animate: false, margin: 0);
+      }
+    });
+  }
+
+  void _toggleWrap() => _keepPosition(() {
+        appSettings.wordWrap = !appSettings.wordWrap;
+        appSettings.changed();
+      });
+
+  void _toggleFold() => _keepPosition(() {
+        appSettings.foldUnchanged = !appSettings.foldUnchanged;
+        appSettings.changed();
+      });
+
+  void _zoom(int direction) {
+    final size = direction == 0
+        ? _defaultFontSize
+        : (appSettings.editorFontSize + direction).clamp(8.0, 32.0);
+    if (size == appSettings.editorFontSize) return;
+    _keepPosition(() {
+      appSettings.editorFontSize = size.toDouble();
+      appSettings.changed();
+    });
+  }
+
+  // ---- undo ----
+
+  /// Undo and redo act on the comparison, except in the search field,
+  /// which keeps its own.
+  void _undo() {
+    if (_findFocus.hasFocus) {
+      Actions.maybeInvoke(_findFocus.context!,
+          const UndoTextIntent(SelectionChangedCause.keyboard));
+      return;
+    }
+    _session.undo();
+  }
+
+  void _redo() {
+    if (_findFocus.hasFocus) {
+      Actions.maybeInvoke(_findFocus.context!,
+          const RedoTextIntent(SelectionChangedCause.keyboard));
+      return;
+    }
+    _session.redo();
+  }
+
+  // ---- search ----
+
+  void _openFind() {
+    final selected = _selectedText();
+    setState(() => _findOpen = true);
+    if (selected != null) {
+      _session.setQuery(selected);
+    } else if (_session.query.isEmpty && _lastQuery.isNotEmpty) {
+      _session.setQuery(_lastQuery);
+    }
+    _startSearchFromView();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _findFocus.requestFocus();
+    });
+  }
+
+  /// A short single-line selection in the focused editor seeds the search.
+  String? _selectedText() {
+    if (!_editing) return null;
+    final model = _sides[_lastFocusedSide];
+    final selection = model.controller.selection;
+    if (!selection.isValid || selection.isCollapsed) return null;
+    final text = selection.textInside(model.text);
+    return text.contains('\n') || text.length > 200 ? null : text;
+  }
+
+  void _closeFind() {
+    _lastQuery = _session.query;
+    _session.setQuery('');
+    setState(() => _findOpen = false);
+    if (_editing) {
+      _sides[_lastFocusedSide].focusNode.requestFocus();
+    } else {
+      _focusView();
+    }
+  }
+
+  void _onQuery(String query) {
+    _session.setQuery(query);
+    _startSearchFromView();
+  }
+
+  /// Makes the first hit at or below the top of the view the current one.
+  void _startSearchFromView() {
+    if (_session.matches.isEmpty) return;
+    int row;
+    if (_editing) {
+      final line = _editorsKey.currentState?.topLine(0).floor() ?? 0;
+      final rowOf = _session.rowOfLine[0];
+      row = rowOf.isEmpty ? 0 : rowOf[line.clamp(0, rowOf.length - 1)];
+    } else {
+      row = _rowsKey.currentState?.topRow ?? 0;
+    }
+    _session.selectMatchFromRow(row);
+    _revealMatch();
+  }
+
+  void _stepMatch(int direction) {
+    if (!_findOpen) {
+      if (_lastQuery.isEmpty) return;
+      _openFind();
+      return;
+    }
+    _session.stepMatch(direction);
+    _revealMatch();
+  }
+
+  void _revealMatch() {
+    final m = _session.currentFindMatch;
+    if (m == null) return;
+    if (_editing) {
+      _editorsKey.currentState?.revealLine(m.side, m.line,
+          select: TextSelection(
+              baseOffset: m.offset, extentOffset: m.offset + m.end - m.start));
+      return;
+    }
+    final rows = _rowsKey.currentState;
+    final rowOf = _session.rowOfLine[m.side];
+    if (rows == null || m.line >= rowOf.length) return;
+    final row = rowOf[m.line];
+    rows.revealRow(row, center: true);
+    final diffRow = _session.result!.rows[row];
+    final text = (m.side == 0 ? diffRow.leftText : diffRow.rightText) ?? '';
+    rows.revealColumns(
+        text, m.start.clamp(0, text.length), m.end.clamp(0, text.length));
+  }
+
+  // ---- go to line ----
+
+  Future<void> _goToLine() async {
+    final answer = await askGoToLine(
+      context,
+      left: !_editing || _lastFocusedSide == 0,
+      leftLines: _session.lineCount(0),
+      rightLines: _session.lineCount(1),
+    );
+    if (answer == null || !mounted) return;
+    final (left, line) = answer;
+    final side = left ? 0 : 1;
+    if (_editing) {
+      final starts = _session.lineStarts(side);
+      final offset = starts[(line - 1).clamp(0, starts.length - 1)];
+      _editorsKey.currentState?.revealLine(side, line - 1,
+          select: TextSelection.collapsed(offset: offset), focus: true);
+      return;
+    }
+    final rowOf = _session.rowOfLine[side];
+    if (line - 1 >= rowOf.length) return;
+    final row = rowOf[line - 1];
+    _rowsKey.currentState?.revealRow(row, center: true);
+    setState(() => _flashRow = row);
+    _flashTimer?.cancel();
+    _flashTimer = Timer(const Duration(milliseconds: 1400), () {
+      if (mounted) setState(() => _flashRow = null);
+    });
+  }
+
+  // ---- saving ----
+
+  Future<void> _saveAll() async {
+    final dirty = [
+      for (var i = 0; i < 2; i++)
+        if (_sides[i].dirty) i
+    ];
+    if (dirty.isEmpty) {
+      _toast('No unsaved changes');
+      return;
+    }
+    for (final i in dirty) {
+      if (!await _saveSide(i)) return;
+    }
+  }
+
+  /// Saves one side in place, or with "Save as" when it has no place of
+  /// its own (pasted text, archives). False when cancelled or failed.
+  Future<bool> _saveSide(int side) async {
+    final model = _sides[side];
+    if (!model.canSaveInPlace) return _saveSideAs(side);
+    if (!await _ensureEncodable(side)) return false;
+    try {
+      await _session.save(side);
+      _toast('Saved ${model.label}');
+      return true;
+    } catch (e) {
+      _toast('Could not save ${model.label}: $e');
+      return false;
+    }
+  }
+
+  Future<bool> _saveSideAs(int side) async {
+    final model = _sides[side];
+    final current = model.side.localPath;
+    final location = await getSaveLocation(
+      suggestedName:
+          model.isMemory ? (side == 0 ? 'left.txt' : 'right.txt') : model.label,
+      initialDirectory: current == null ? null : p.dirname(current),
+      confirmButtonText: 'Save',
+    );
+    if (location == null || !mounted) return false;
+    if (!await _ensureEncodable(side)) return false;
+    try {
+      await _session.saveAs(side, location.path);
+      _toast('Saved ${p.basename(location.path)}');
+      return true;
+    } catch (e) {
+      _toast('Could not save: $e');
+      return false;
+    }
+  }
+
+  /// When the side's encoding cannot hold its text, asks to switch to
+  /// UTF-8 rather than writing something else than what is on screen.
+  Future<bool> _ensureEncodable(int side) async {
+    final model = _sides[side];
+    final bad = firstUnencodable(model.text, model.format.encoding);
+    if (bad == null) return true;
+    final char = String.fromCharCode(model.text.codeUnitAt(bad));
+    if (!await askSaveAsUtf8(context, model.label, char)) return false;
+    _session.setFormat(
+        side, model.format.copyWith(encoding: TextEncoding.utf8, bom: false));
+    return true;
+  }
+
+  /// The tab's close guard: offers to save unsaved sides.
+  Future<bool> _confirmClose() async {
+    final dirty = [
+      for (var i = 0; i < 2; i++)
+        if (_sides[i].dirty) i
+    ];
+    if (dirty.isEmpty || !mounted) return true;
+    final choice =
+        await askSaveChanges(context, [for (final i in dirty) _sides[i].label]);
+    switch (choice) {
+      case SaveChoice.save:
+        for (final i in dirty) {
+          if (!await _saveSide(i)) return false;
+        }
+        return true;
+      case SaveChoice.discard:
+        return true;
+      case SaveChoice.cancel:
+        return false;
+    }
+  }
+
+  Future<void> _back() async {
+    if (await _confirmClose()) widget.onBack?.call();
+  }
+
+  Future<void> _refresh() async {
+    final dirty = [
+      for (final s in _sides)
+        if (s.dirty && !s.isMemory) s.label
+    ];
+    if (dirty.isNotEmpty && !await askDiscardAndReload(context, dirty)) return;
+    await _session.reloadAll();
+    if (_sides.any((s) => !s.isMemory)) _toast('Compared again from disk');
+  }
+
+  Future<void> _paste(int side) async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text;
+    if (text == null || text.isEmpty) {
+      _toast('The clipboard has no text');
+      return;
+    }
+    final decoded = decodeString(text);
+    _session.replaceText(side, decoded.text, label: 'Paste');
+    if (decoded.format.lineEnding != _sides[side].format.lineEnding) {
+      _session.setFormat(side,
+          _sides[side].format.copyWith(lineEnding: decoded.format.lineEnding));
+    }
+  }
+
+  // ---- export ----
+
+  String _patch() {
+    String raw(SideModel s) =>
+        applyLineEndings(s.text, s.format.lineEnding, mixed: s.mixed);
+    return unifiedDiff(
+      raw(_sides[0]),
+      raw(_sides[1]),
+      leftName: _sides[0].side.description,
+      rightName: _sides[1].side.description,
+      options: _session.options,
     );
   }
 
-  String get _title => widget.title ?? widget.left.label;
+  Future<void> _copyPatch() async {
+    final patch = _patch();
+    if (patch.isEmpty) {
+      _toast('No differences to copy');
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: patch));
+    _toast('Copied the unified diff');
+  }
+
+  Future<void> _savePatch() async {
+    final patch = _patch();
+    if (patch.isEmpty) {
+      _toast('No differences to save');
+      return;
+    }
+    final base = p.basenameWithoutExtension(_sides[0].label);
+    final location = await getSaveLocation(
+      suggestedName: '${base.isEmpty ? 'changes' : base}.patch',
+      acceptedTypeGroups: const [
+        XTypeGroup(label: 'Patch', extensions: ['patch', 'diff']),
+      ],
+      confirmButtonText: 'Save',
+    );
+    if (location == null) return;
+    try {
+      await File(location.path).writeAsString(patch, flush: true);
+      _toast('Saved ${p.basename(location.path)}');
+    } catch (e) {
+      _toast('Could not save the patch: $e');
+    }
+  }
+
+  Future<void> _copyText(int side) async {
+    await Clipboard.setData(ClipboardData(text: _sides[side].text));
+    _toast('Copied the ${side == 0 ? 'left' : 'right'} text');
+  }
+
+  // ---- keys ----
+
+  /// Scrolling keys in view mode (editors handle their own).
+  KeyEventResult _onViewKey(FocusNode node, KeyEvent event) {
+    if (_editing || event is KeyUpEvent) return KeyEventResult.ignored;
+    final keyboard = HardwareKeyboard.instance;
+    if (keyboard.isAltPressed || keyboard.isMetaPressed) {
+      return KeyEventResult.ignored;
+    }
+    final rows = _rowsKey.currentState;
+    if (rows == null) return KeyEventResult.ignored;
+    final line = EditorMetrics.of(appSettings).lineHeight;
+    final page = rows.viewHeight * 0.9;
+    final ctrl = keyboard.isControlPressed;
+    switch (event.logicalKey) {
+      case LogicalKeyboardKey.arrowDown when !ctrl:
+        rows.scrollBy(line);
+      case LogicalKeyboardKey.arrowUp when !ctrl:
+        rows.scrollBy(-line);
+      case LogicalKeyboardKey.pageDown:
+        rows.scrollBy(page);
+      case LogicalKeyboardKey.pageUp:
+        rows.scrollBy(-page);
+      case LogicalKeyboardKey.home:
+        rows.scrollBy(-double.maxFinite);
+      case LogicalKeyboardKey.end:
+        rows.scrollBy(double.maxFinite);
+      case LogicalKeyboardKey.arrowLeft when !ctrl:
+        rows.scrollHorizontallyBy(-40);
+      case LogicalKeyboardKey.arrowRight when !ctrl:
+        rows.scrollHorizontallyBy(40);
+      default:
+        return KeyEventResult.ignored;
+    }
+    return KeyEventResult.handled;
+  }
+
+  // ---- build ----
+
+  String get _title =>
+      widget.title ?? '${_sides[0].label} ↔ ${_sides[1].label}';
 
   @override
   Widget build(BuildContext context) {
-    final palette = DiffPalette.of(context);
-    final result = _result;
-    final scheme = Theme.of(context).colorScheme;
-
-    if (_error != null) {
-      return Center(child: Text('Could not read files:\n$_error'));
+    final session = _session;
+    if (session.error != null) {
+      return Center(child: Text('Could not read files:\n${session.error}'));
     }
-    if (_notice != null) return _NoticeView(message: _notice!);
+    if (session.notice != null) return _NoticeView(message: session.notice!);
+    final result = session.result;
     if (result == null) {
       return const Center(child: CircularProgressIndicator());
     }
+    final metrics = EditorMetrics.of(appSettings);
 
     return CallbackShortcuts(
-      bindings: {
-        const SingleActivator(LogicalKeyboardKey.keyS, control: true): () =>
-            _save(left: true, right: true),
-      },
-      child: Column(
+      bindings: bindActions({
+        AppAction.nextChange: () => _step(1),
+        AppAction.previousChange: () => _step(-1),
+        AppAction.find: _openFind,
+        AppAction.findNext: () => _stepMatch(1),
+        AppAction.findPrevious: () => _stepMatch(-1),
+        AppAction.goToLine: _goToLine,
+        AppAction.save: _saveAll,
+        AppAction.toggleEdit: () => _setEditing(!_editing),
+        AppAction.copyToRight: () => _copyCurrent(toRight: true),
+        AppAction.copyToLeft: () => _copyCurrent(toRight: false),
+        AppAction.undo: _undo,
+        AppAction.redo: _redo,
+        AppAction.zoomIn: () => _zoom(1),
+        AppAction.zoomOut: () => _zoom(-1),
+        AppAction.zoomReset: () => _zoom(0),
+        AppAction.toggleWrap: _toggleWrap,
+        AppAction.toggleFold: _toggleFold,
+        AppAction.refresh: _refresh,
+      }),
+      child: Listener(
+        // Clicks anywhere bring the keyboard here, unless an editor or
+        // field inside already has it.
+        onPointerDown: (_) {
+          final focus = FocusManager.instance.primaryFocus;
+          if (focus == null || !_isInside(focus)) _focusView();
+        },
+        child: Column(
+          children: [
+            _toolbar(context, result),
+            for (var i = 0; i < 2; i++)
+              if (_sides[i].pendingDiskBytes != null) _diskBanner(context, i),
+            _paneHeaders(context),
+            const Divider(),
+            Expanded(
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: Focus(
+                      focusNode: _viewFocus,
+                      onKeyEvent: _onViewKey,
+                      child: _editing
+                          ? DiffEditorsView(
+                              key: _editorsKey,
+                              session: session,
+                              scrolls: _editScrolls,
+                              metrics: metrics,
+                              currentBlock: _currentBlock,
+                              onCopy: _copy,
+                              onDelete: _delete,
+                              onLayout: _onLayout,
+                            )
+                          : DiffRowsView(
+                              key: _rowsKey,
+                              session: session,
+                              scroll: _rowsScroll,
+                              metrics: metrics,
+                              fold: appSettings.foldUnchanged,
+                              foldContext: appSettings.foldContext,
+                              currentBlock: _currentBlock,
+                              onCopy: _copy,
+                              onDelete: _delete,
+                              onRowTap: _onRowTap,
+                              highlightRow: _flashRow,
+                              onLayout: _onLayout,
+                            ),
+                    ),
+                  ),
+                  if (_findOpen)
+                    Positioned(
+                      top: 8,
+                      right: Minimap.width + 12,
+                      child: FindBar(
+                        session: session,
+                        focusNode: _findFocus,
+                        onQueryChanged: _onQuery,
+                        onStep: _stepMatch,
+                        onClose: _closeFind,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            _statusBar(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  bool _isInside(FocusNode node) {
+    final viewContext = _viewFocus.context;
+    if (viewContext == null) return false;
+    if (node == _viewFocus || node == _findFocus) return true;
+    if (_sides.any((s) => s.focusNode == node)) return true;
+    return node.ancestors.contains(_viewFocus);
+  }
+
+  /// Below these widths the toolbar sheds labels, then moves undo and redo
+  /// into the overflow menu, rather than overflowing.
+  static const _compactToolbar = 1000.0;
+  static const _narrowToolbar = 820.0;
+
+  Widget _toolbar(BuildContext context, DiffResult result) {
+    return LayoutBuilder(
+        builder: (context, constraints) => _toolbarRow(context, result,
+            compact: constraints.maxWidth < _compactToolbar,
+            narrow: constraints.maxWidth < _narrowToolbar));
+  }
+
+  Widget _toolbarRow(BuildContext context, DiffResult result,
+      {required bool compact, required bool narrow}) {
+    final palette = DiffPalette.of(context);
+    final history = _session.history;
+    String tip(String label, AppAction action) => '$label (${action.keyLabel})';
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 8, 12, 4),
+      child: Row(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(8, 8, 12, 4),
-            child: Row(
-              children: [
-                if (widget.onBack != null)
-                  IconButton(
-                    tooltip: 'Change files',
-                    onPressed: widget.onBack,
-                    icon: const Icon(Icons.arrow_back, size: 20),
-                  ),
-                const SizedBox(width: 4),
-                Flexible(
-                  child: Text(_title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 14.5, fontWeight: FontWeight.w600)),
-                ),
-                const SizedBox(width: 14),
-                _ChangeStats(result: result, palette: palette),
-                if (_leftDirty || _rightDirty)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 4),
-                    child: Text('● unsaved',
-                        style: TextStyle(
-                            fontSize: 11.5, color: palette.modified)),
-                  ),
-                const Spacer(),
-                if (!_editing && result.changeBlocks.isNotEmpty) ...[
-                  Text(
-                    _currentBlock < 0
-                        ? '${result.changeBlocks.length} changes'
-                        : '${_currentBlock + 1} / ${result.changeBlocks.length}',
-                    style: TextStyle(
-                        fontSize: 12, color: scheme.onSurfaceVariant),
-                  ),
-                  IconButton(
-                    tooltip: 'Previous change',
-                    onPressed:
-                        _currentBlock > 0 ? () => _jumpToBlock(-1) : null,
-                    icon: const Icon(Icons.keyboard_arrow_up),
-                  ),
-                  IconButton(
-                    tooltip: 'Next change',
-                    onPressed: _currentBlock < result.changeBlocks.length - 1
-                        ? () => _jumpToBlock(1)
-                        : null,
-                    icon: const Icon(Icons.keyboard_arrow_down),
-                  ),
-                  const SizedBox(width: 8),
-                ],
-                if (_editing) ...[
-                  TextButton.icon(
-                    onPressed: _leftDirty && !widget.left.isMemory
-                        ? () => _save(left: true, right: false)
-                        : null,
-                    icon: const Icon(Icons.save_outlined, size: 17),
-                    label: Text(
-                        _leftExists ? 'Save left' : 'Create left'),
-                  ),
-                  TextButton.icon(
-                    onPressed: _rightDirty && !widget.right.isMemory
-                        ? () => _save(left: false, right: true)
-                        : null,
-                    icon: const Icon(Icons.save_outlined, size: 17),
-                    label: Text(
-                        _rightExists ? 'Save right' : 'Create right'),
-                  ),
-                  const SizedBox(width: 8),
-                ],
-                SegmentedButton<bool>(
-                  showSelectedIcon: false,
-                  style: SegmentedButton.styleFrom(
-                      visualDensity: VisualDensity.compact),
-                  segments: const [
-                    ButtonSegment(
-                        value: false,
-                        icon: Icon(Icons.visibility_outlined, size: 16),
-                        label: Text('View')),
-                    ButtonSegment(
-                        value: true,
-                        icon: Icon(Icons.edit_outlined, size: 16),
-                        label: Text('Edit')),
-                  ],
-                  selected: {_editing},
-                  onSelectionChanged: (selection) {
-                    _debounce?.cancel();
-                    setState(() => _editing = selection.first);
-                    if (!selection.first) _rediff();
-                  },
-                ),
-              ],
+          if (widget.onBack != null)
+            IconButton(
+              tooltip: 'Change files',
+              onPressed: _back,
+              icon: const Icon(Icons.arrow_back, size: 20),
             ),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(_title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    fontSize: 14.5, fontWeight: FontWeight.w600)),
           ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 30, 6),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    _leftExists
-                        ? widget.left.description
-                        : '${widget.left.description}  (does not exist yet)',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                        fontSize: 11.5, color: scheme.onSurfaceVariant),
-                  ),
-                ),
-                const SizedBox(width: 24),
-                Expanded(
-                  child: Text(
-                    _rightExists
-                        ? widget.right.description
-                        : '${widget.right.description}  (does not exist yet)',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.right,
-                    style: TextStyle(
-                        fontSize: 11.5, color: scheme.onSurfaceVariant),
-                  ),
-                ),
-              ],
+          const SizedBox(width: 14),
+          _ChangeStats(result: result, palette: palette),
+          if (_session.dirty)
+            Padding(
+              padding: const EdgeInsets.only(left: 4),
+              child: Text('● unsaved',
+                  style: TextStyle(fontSize: 11.5, color: palette.modified)),
             ),
+          const Spacer(),
+          IconButton(
+            tooltip: tip('Find', AppAction.find),
+            isSelected: _findOpen,
+            onPressed: _findOpen ? _closeFind : _openFind,
+            icon: const Icon(Icons.search, size: 20),
           ),
-          const Divider(),
-          Expanded(
-            child: _editing
-                ? _editBody(scheme)
-                : _viewBody(result, palette),
+          _navigation(),
+          if (!compact) const _ToolbarDivider(),
+          if (!narrow) ...[
+            IconButton(
+              tooltip: history.canUndo
+                  ? tip('Undo ${history.undoLabel!.toLowerCase()}',
+                      AppAction.undo)
+                  : tip('Undo', AppAction.undo),
+              onPressed: history.canUndo ? _session.undo : null,
+              icon: const Icon(Icons.undo, size: 20),
+            ),
+            IconButton(
+              tooltip: history.canRedo
+                  ? tip('Redo ${history.redoLabel!.toLowerCase()}',
+                      AppAction.redo)
+                  : tip('Redo', AppAction.redo),
+              onPressed: history.canRedo ? _session.redo : null,
+              icon: const Icon(Icons.redo, size: 20),
+            ),
+          ],
+          if (!compact) const _ToolbarDivider(),
+          IconButton(
+            tooltip: tip('Wrap long lines', AppAction.toggleWrap),
+            isSelected: appSettings.wordWrap,
+            onPressed: _toggleWrap,
+            icon: const Icon(Icons.wrap_text, size: 20),
+          ),
+          IconButton(
+            tooltip: _editing
+                ? 'Hiding unchanged lines works in view mode'
+                : tip('Hide unchanged lines', AppAction.toggleFold),
+            isSelected: appSettings.foldUnchanged,
+            onPressed: _editing ? null : _toggleFold,
+            icon: const Icon(Icons.unfold_less, size: 20),
+          ),
+          CompareRulesButton(
+            options: _session.options,
+            overridden: _session.optionsOverridden,
+            onChanged: _session.setOptions,
+            onReset: () => _session.setOptions(appSettings.compareOptions,
+                overridden: false),
+          ),
+          _moreMenu(withUndo: narrow),
+          const SizedBox(width: 6),
+          Tooltip(
+            message: tip('Switch between view and edit', AppAction.toggleEdit),
+            child: SegmentedButton<bool>(
+              showSelectedIcon: false,
+              style: SegmentedButton.styleFrom(
+                  visualDensity: VisualDensity.compact),
+              segments: [
+                ButtonSegment(
+                    value: false,
+                    icon: const Icon(Icons.visibility_outlined, size: 16),
+                    label: compact ? null : const Text('View')),
+                ButtonSegment(
+                    value: true,
+                    icon: const Icon(Icons.edit_outlined, size: 16),
+                    label: compact ? null : const Text('Edit')),
+              ],
+              selected: {_editing},
+              onSelectionChanged: (selection) => _setEditing(selection.first),
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _viewBody(DiffResult result, DiffPalette palette) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Expanded(
-          child: result.rows.isEmpty
-              ? const Center(child: Text('Both files are empty'))
-              : ListView.builder(
-                  controller: _viewScroll,
-                  itemExtent: _rowExtent,
-                  itemCount: result.rows.length,
-                  itemBuilder: (context, index) => _DiffRowWidget(
-                      row: result.rows[index], palette: palette),
-                ),
-        ),
-        _ChangeMap(result: result, palette: palette, onJump: _jumpToRow),
+  /// Previous / next change, enabled by where the panes are scrolled.
+  Widget _navigation() {
+    return ListenableBuilder(
+      listenable: Listenable.merge([_rowsScroll, _editScrolls[0], _layoutTick]),
+      builder: (context, _) {
+        final count = _session.blocks.length;
+        final vp = _viewport;
+        final previous =
+            vp == null ? null : neighbourBlock(vp, count, _currentBlock, -1);
+        final next = vp == null
+            ? (count > 0 ? 0 : null)
+            : neighbourBlock(vp, count, _currentBlock, 1);
+        return Row(mainAxisSize: MainAxisSize.min, children: [
+          IconButton(
+            tooltip: 'Previous change (${AppAction.previousChange.keyLabel})',
+            onPressed: previous == null ? null : () => _step(-1),
+            icon: const Icon(Icons.keyboard_arrow_up),
+          ),
+          IconButton(
+            tooltip: 'Next change (${AppAction.nextChange.keyLabel})',
+            onPressed: next == null ? null : () => _step(1),
+            icon: const Icon(Icons.keyboard_arrow_down),
+          ),
+        ]);
+      },
+    );
+  }
+
+  Widget _moreMenu({required bool withUndo}) {
+    PopupMenuItem<VoidCallback> item(
+            IconData icon, String label, VoidCallback action,
+            {AppAction? keys, bool enabled = true}) =>
+        PopupMenuItem(
+          value: action,
+          enabled: enabled,
+          child: Row(children: [
+            Icon(icon, size: 18),
+            const SizedBox(width: 12),
+            Expanded(child: Text(label)),
+            if (keys != null)
+              Padding(
+                padding: const EdgeInsets.only(left: 18),
+                child: Text(keys.keyLabel,
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant)),
+              ),
+          ]),
+        );
+    final identical = _session.blocks.isEmpty;
+    return PopupMenuButton<VoidCallback>(
+      tooltip: 'More',
+      icon: const Icon(Icons.more_vert, size: 20),
+      onSelected: (action) => action(),
+      itemBuilder: (context) => [
+        if (withUndo) ...[
+          item(Icons.undo, 'Undo', _session.undo,
+              keys: AppAction.undo, enabled: _session.history.canUndo),
+          item(Icons.redo, 'Redo', _session.redo,
+              keys: AppAction.redo, enabled: _session.history.canRedo),
+          const PopupMenuDivider(),
+        ],
+        item(Icons.content_copy, 'Copy as unified diff', _copyPatch,
+            enabled: !identical),
+        item(Icons.save_alt, 'Save patch…', _savePatch, enabled: !identical),
+        const PopupMenuDivider(),
+        item(Icons.west, 'Copy left text', () => _copyText(0)),
+        item(Icons.east, 'Copy right text', () => _copyText(1)),
+        const PopupMenuDivider(),
+        item(Icons.refresh, 'Reload from disk', _refresh,
+            keys: AppAction.refresh, enabled: _sides.any((s) => !s.isMemory)),
+        item(Icons.pin_outlined, 'Go to line…', _goToLine,
+            keys: AppAction.goToLine),
+        const PopupMenuDivider(),
+        item(Icons.zoom_in, 'Bigger text', () => _zoom(1),
+            keys: AppAction.zoomIn),
+        item(Icons.zoom_out, 'Smaller text', () => _zoom(-1),
+            keys: AppAction.zoomOut),
+        item(Icons.text_fields, 'Reset text size', () => _zoom(0),
+            keys: AppAction.zoomReset),
       ],
     );
   }
 
-  Widget _editBody(ColorScheme scheme) {
-    Widget editor(
-        _DiffEditingController controller, ScrollController scroll) {
-      return TextField(
-        controller: controller,
-        scrollController: scroll,
-        maxLines: null,
-        expands: true,
-        style: monoStyle,
-        textAlignVertical: TextAlignVertical.top,
-        decoration: const InputDecoration(
-          border: InputBorder.none,
-          contentPadding: EdgeInsets.fromLTRB(14, 10, 14, 10),
+  Widget _diskBanner(BuildContext context, int side) {
+    final scheme = Theme.of(context).colorScheme;
+    final model = _sides[side];
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 2, 12, 6),
+      padding: const EdgeInsets.fromLTRB(14, 6, 8, 6),
+      decoration: BoxDecoration(
+        color: scheme.tertiaryContainer.withValues(alpha: 0.7),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(children: [
+        Icon(Icons.sync_problem, size: 18, color: scheme.onTertiaryContainer),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text('${model.label} changed on disk.',
+              style: TextStyle(color: scheme.onTertiaryContainer)),
         ),
-      );
-    }
+        TextButton(
+          onPressed: () =>
+              _session.reloadFromDisk(side, model.pendingDiskBytes!),
+          child: const Text('Reload'),
+        ),
+        TextButton(
+          onPressed: () => _session.keepMine(side),
+          child: const Text('Keep mine'),
+        ),
+      ]),
+    );
+  }
 
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Expanded(child: editor(_leftController, _leftEditScroll)),
-        VerticalDivider(
-            width: 1, color: scheme.outlineVariant.withValues(alpha: 0.5)),
-        Expanded(child: editor(_rightController, _rightEditScroll)),
-      ],
+  Widget _paneHeaders(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(0, 0, 0, 4),
+      child: Row(children: [
+        Expanded(child: _paneHeader(context, 0)),
+        const SizedBox(width: ConnectorGutter.width),
+        Expanded(child: _paneHeader(context, 1)),
+        const SizedBox(width: Minimap.width),
+      ]),
+    );
+  }
+
+  Widget _paneHeader(BuildContext context, int side) {
+    final scheme = Theme.of(context).colorScheme;
+    final palette = DiffPalette.of(context);
+    final model = _sides[side];
+    final name = model.exists
+        ? model.side.description
+        : '${model.side.description}  (does not exist yet)';
+    final saveLabel = !model.canSaveInPlace
+        ? 'Save as…'
+        : model.exists
+            ? 'Save'
+            : 'Create';
+    final small = TextButton.styleFrom(
+      visualDensity: VisualDensity.compact,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      textStyle: const TextStyle(fontSize: 12),
+    );
+    return Padding(
+      padding: const EdgeInsets.only(left: 12, right: 6),
+      child: SizedBox(
+        height: 30,
+        child: Row(children: [
+          if (model.dirty)
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: Icon(Icons.circle, size: 8, color: palette.modified),
+            ),
+          Expanded(
+            child: Tooltip(
+              message: name,
+              waitDuration: const Duration(milliseconds: 600),
+              child: Text(name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontSize: 11.5, color: scheme.onSurfaceVariant)),
+            ),
+          ),
+          if (model.isMemory)
+            Tooltip(
+              message: 'Replace this side with the clipboard text',
+              child: TextButton.icon(
+                style: small,
+                onPressed: () => _paste(side),
+                icon: const Icon(Icons.content_paste, size: 15),
+                label: const Text('Paste'),
+              ),
+            ),
+          Tooltip(
+            message: model.canSaveInPlace
+                ? 'Save ${model.label} (${AppAction.save.keyLabel} saves both)'
+                : 'Save to a file of your choice',
+            child: TextButton.icon(
+              style: small,
+              onPressed:
+                  model.dirty || (model.isMemory && model.text.isNotEmpty)
+                      ? () => _saveSide(side)
+                      : null,
+              icon: const Icon(Icons.save_outlined, size: 15),
+              label: Text(saveLabel),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  Widget _statusBar() {
+    SideStatus status(int i, (int, int, int)? cursor) => SideStatus(
+          format: _sides[i].format,
+          originalFormat: _sides[i].savedFormat,
+          lines: _session.lineCount(i),
+          canChangeFormat: true,
+          cursor: cursor != null && cursor.$1 == i
+              ? (cursor.$2 + 1, cursor.$3 + 1)
+              : null,
+        );
+    final scroll =
+        Listenable.merge([_rowsScroll, _editScrolls[0], _layoutTick]);
+    return ValueListenableBuilder(
+      valueListenable: _cursor,
+      builder: (context, cursor, _) => DiffStatusBar(
+        left: status(0, cursor),
+        right: status(1, cursor),
+        rules: _session.options.summary,
+        onFormat: _session.setFormat,
+        changeText: ListenableBuilder(
+          listenable: scroll,
+          builder: (context, _) {
+            final count = _session.blocks.length;
+            if (count == 0) return const Text('No differences');
+            final viewport = _viewport;
+            final at = viewport == null
+                ? -1
+                : blockAtReadingLine(viewport, count, _currentBlock);
+            return Text(at < 0
+                ? '$count change${count == 1 ? '' : 's'}'
+                : 'Change ${at + 1} of $count');
+          },
+        ),
+      ),
     );
   }
 }
 
-/// A [TextEditingController] that paints per-line diff backgrounds while
-/// the user types, so added / removed / modified lines stay highlighted
-/// during editing.
-class _DiffEditingController extends TextEditingController {
-  List<DiffRowKind?> _lineKinds = const [];
-  Map<DiffRowKind, Color> _colors = const {};
-
-  void setHighlights(List<DiffRowKind?> kinds, Map<DiffRowKind, Color> colors) {
-    _lineKinds = kinds;
-    _colors = colors;
-    notifyListeners();
-  }
+class _ToolbarDivider extends StatelessWidget {
+  const _ToolbarDivider();
 
   @override
-  TextSpan buildTextSpan({
-    required BuildContext context,
-    TextStyle? style,
-    required bool withComposing,
-  }) {
-    final lines = text.split('\n');
-    final children = <TextSpan>[];
-    for (var i = 0; i < lines.length; i++) {
-      final kind = i < _lineKinds.length ? _lineKinds[i] : null;
-      final bg = kind == null ? null : _colors[kind];
-      final chunk = i < lines.length - 1 ? '${lines[i]}\n' : lines[i];
-      children.add(TextSpan(
-        text: chunk,
-        style: bg == null ? null : TextStyle(backgroundColor: bg),
-      ));
-    }
-    return TextSpan(style: style, children: children);
-  }
-}
-
-class _SideContent {
-  const _SideContent({
-    this.text,
-    this.binary = false,
-    this.tooLarge = false,
-    this.exists = true,
-  });
-
-  final String? text;
-  final bool binary;
-  final bool tooLarge;
-  final bool exists;
+  Widget build(BuildContext context) => SizedBox(
+        height: 22,
+        child: VerticalDivider(
+          width: 12,
+          color: Theme.of(context).colorScheme.outlineVariant,
+        ),
+      );
 }
 
 class _ChangeStats extends StatelessWidget {
@@ -533,186 +1195,31 @@ class _ChangeStats extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Widget chip(String text, Color color) => Padding(
-          padding: const EdgeInsets.only(right: 8),
-          child: Text(text,
-              style: TextStyle(
-                  fontSize: 12.5, fontWeight: FontWeight.w700, color: color)),
+    Widget chip(String text, Color color, String tooltip) => Tooltip(
+          message: tooltip,
+          child: Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: Text(text,
+                style: TextStyle(
+                    fontSize: 12.5, fontWeight: FontWeight.w700, color: color)),
+          ),
         );
     if (result.changeBlocks.isEmpty) {
-      return chip('identical', palette.added);
+      return chip(
+          'identical',
+          palette.added,
+          'No differences under the '
+              'current compare rules');
     }
     return Row(children: [
-      if (result.addedCount > 0) chip('+${result.addedCount}', palette.added),
+      if (result.addedCount > 0)
+        chip('+${result.addedCount}', palette.added, 'Lines added'),
       if (result.removedCount > 0)
-        chip('−${result.removedCount}', palette.removed),
+        chip('−${result.removedCount}', palette.removed, 'Lines removed'),
       if (result.modifiedCount > 0)
-        chip('~${result.modifiedCount}', palette.modified),
+        chip('~${result.modifiedCount}', palette.modified, 'Lines changed'),
     ]);
   }
-}
-
-class _DiffRowWidget extends StatelessWidget {
-  const _DiffRowWidget({required this.row, required this.palette});
-
-  final DiffRow row;
-  final DiffPalette palette;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final numberStyle = monoStyle.copyWith(
-      fontSize: 11.5,
-      color: scheme.onSurfaceVariant.withValues(alpha: 0.6),
-    );
-
-    return ColoredBox(
-      color: palette.rowBackground(row.kind),
-      child: Row(
-        children: [
-          _gutter(row.leftNumber, numberStyle),
-          Expanded(
-            child: _cell(
-              context,
-              text: row.leftText,
-              spans: row.leftSpans,
-              emphasis: palette.removedEmphasis,
-              missing: row.kind == DiffRowKind.added,
-            ),
-          ),
-          VerticalDivider(
-              width: 1, color: scheme.outlineVariant.withValues(alpha: 0.5)),
-          _gutter(row.rightNumber, numberStyle),
-          Expanded(
-            child: _cell(
-              context,
-              text: row.rightText,
-              spans: row.rightSpans,
-              emphasis: palette.addedEmphasis,
-              missing: row.kind == DiffRowKind.removed,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _gutter(int? number, TextStyle style) {
-    return SizedBox(
-      width: 52,
-      child: Padding(
-        padding: const EdgeInsets.only(right: 10),
-        child: Text(
-          number?.toString() ?? '',
-          textAlign: TextAlign.right,
-          style: style,
-        ),
-      ),
-    );
-  }
-
-  Widget _cell(
-    BuildContext context, {
-    required String? text,
-    required List<(int, int)>? spans,
-    required Color emphasis,
-    required bool missing,
-  }) {
-    if (missing) {
-      return Container(
-        color: Theme.of(context)
-            .colorScheme
-            .surfaceContainerHighest
-            .withValues(alpha: 0.25),
-      );
-    }
-    final content = text ?? '';
-    if (spans == null || spans.isEmpty) {
-      return Text(content,
-          maxLines: 1, overflow: TextOverflow.clip, style: monoStyle);
-    }
-    final children = <TextSpan>[];
-    var cursor = 0;
-    for (final (start, end) in spans) {
-      if (start > cursor) {
-        children.add(TextSpan(text: content.substring(cursor, start)));
-      }
-      children.add(TextSpan(
-        text: content.substring(start, end),
-        style: TextStyle(backgroundColor: emphasis),
-      ));
-      cursor = end;
-    }
-    if (cursor < content.length) {
-      children.add(TextSpan(text: content.substring(cursor)));
-    }
-    return Text.rich(
-      TextSpan(style: monoStyle, children: children),
-      maxLines: 1,
-      overflow: TextOverflow.clip,
-    );
-  }
-}
-
-class _ChangeMap extends StatelessWidget {
-  const _ChangeMap({
-    required this.result,
-    required this.palette,
-    required this.onJump,
-  });
-
-  final DiffResult result;
-  final DiffPalette palette;
-  final void Function(int rowIndex) onJump;
-
-  @override
-  Widget build(BuildContext context) {
-    if (result.rows.isEmpty) return const SizedBox(width: 14);
-    return GestureDetector(
-      onTapDown: (details) {
-        final box = context.findRenderObject() as RenderBox;
-        final fraction = details.localPosition.dy / box.size.height;
-        onJump((fraction * result.rows.length).round());
-      },
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: CustomPaint(
-          size: const Size(14, double.infinity),
-          painter: _ChangeMapPainter(result: result, palette: palette),
-        ),
-      ),
-    );
-  }
-}
-
-class _ChangeMapPainter extends CustomPainter {
-  _ChangeMapPainter({required this.result, required this.palette});
-
-  final DiffResult result;
-  final DiffPalette palette;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final total = result.rows.length;
-    if (total == 0) return;
-    final paint = Paint();
-    for (var i = 0; i < total; i++) {
-      final kind = result.rows[i].kind;
-      if (kind == DiffRowKind.same) continue;
-      paint.color = switch (kind) {
-        DiffRowKind.added => palette.added,
-        DiffRowKind.removed => palette.removed,
-        _ => palette.modified,
-      };
-      final top = i / total * size.height;
-      final height = math.max(2.0, size.height / total);
-      canvas.drawRect(Rect.fromLTWH(3, top, size.width - 6, height), paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(_ChangeMapPainter oldDelegate) =>
-      oldDelegate.result != result;
 }
 
 class _NoticeView extends StatelessWidget {
