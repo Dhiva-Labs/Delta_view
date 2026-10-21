@@ -1,0 +1,29 @@
+Source: delta-view
+Section: devel
+Priority: optional
+Maintainer: Dhiva Labs <dhivakar1010@gmail.com>
+Build-Depends: debhelper-compat (= 13),
+               clang,
+               cmake,
+               ninja-build,
+               pkg-config,
+               libgtk-3-dev,
+               liblzma-dev,
+               xz-utils,
+               git,
+               python3
+Standards-Version: 4.6.2
+Homepage: https://github.com/Dhiva-Labs/Delta_view
+Rules-Requires-Root: no
+
+Package: delta-view
+Architecture: amd64
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Compare and merge folders and files, Meld-style
+ DeltaView compares folders and files side by side and merges the
+ differences: copy changes across, resolve three-way merges, and
+ synchronize folders with a preview of every step.
+ .
+ It compares local folders, zip and tar archives and SFTP servers, shows
+ images and JSON, YAML and CSV by their structure, and works as git
+ difftool and mergetool.

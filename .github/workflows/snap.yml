@@ -1,0 +1,105 @@
+name: Snap
+
+# Builds the snap natively on amd64 and arm64, installs it and runs it under
+# strict confinement. The Snap Store upload is done by hand (see
+# packaging/SNAP.md); the snaps are kept as workflow artifacts for it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  snap:
+    name: Snap ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            elf_machine: x86-64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            elf_machine: ARM aarch64
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build the snap
+        uses: snapcore/action-build@v1
+        id: build
+
+      - name: Assert the snap is ${{ matrix.arch }}
+        env:
+          SNAP_FILE: ${{ steps.build.outputs.snap }}
+          ELF_MACHINE: ${{ matrix.elf_machine }}
+        run: |
+          ls -l "$SNAP_FILE"
+          case "$SNAP_FILE" in
+            *_${{ matrix.arch }}.snap) ;;
+            *) echo "::error::unexpected snap file name $SNAP_FILE"; exit 1 ;;
+          esac
+          command -v unsquashfs > /dev/null || sudo apt-get install -y squashfs-tools
+          unsquashfs -q -d "$RUNNER_TEMP/snap" "$SNAP_FILE" meta/snap.yaml meta/gui delta_view
+          grep -qx -- '- ${{ matrix.arch }}' "$RUNNER_TEMP/snap/meta/snap.yaml"
+          file "$RUNNER_TEMP/snap/delta_view" | tee /dev/stderr | grep -q "$ELF_MACHINE"
+          # The launcher must keep the app id's name, and its icon must
+          # resolve inside the snap.
+          cat "$RUNNER_TEMP/snap/meta/gui/com.dhivalabs.delta_view.desktop"
+          grep -q '^Icon=\${SNAP}/' "$RUNNER_TEMP/snap/meta/gui/com.dhivalabs.delta_view.desktop"
+
+      # A strictly confined bundle can look right and still fail to start
+      # (a missing library, a denied access), so install the snap and run it.
+      # The window shows after Flutter draws its first frame, and the Dart
+      # code creates the app's data folder on start-up; both together prove
+      # the AOT snapshot runs inside the confinement. -ac: a confined snap
+      # cannot read xvfb-run's X authority file.
+      - name: Install the snap and run it confined (Xvfb)
+        timeout-minutes: 15
+        env:
+          SNAP_FILE: ${{ steps.build.outputs.snap }}
+        run: |
+          sudo apt-get install -y xvfb xauth xdotool
+          sudo snap install --dangerous "$SNAP_FILE"
+          snap connections delta-view
+          cat > "$RUNNER_TEMP/snap-smoke.sh" <<'SCRIPT'
+          log="$RUNNER_TEMP/snap-smoke.log"
+          snap run delta-view > "$log" 2>&1 &
+          pid=$!
+          data=""
+          for i in $(seq 1 120); do
+            data="$(find "$HOME/snap/delta-view" -type d -name com.dhivalabs.delta_view 2> /dev/null | head -n 1)"
+            if xdotool search --onlyvisible --name '^DeltaView$' > /dev/null 2>&1 && [ -n "$data" ]; then
+              echo "window is up and $data exists after ${i}s"
+              sleep 5
+              kill -0 "$pid" || { echo "delta-view died after showing its window"; cat "$log"; exit 1; }
+              kill "$pid"
+              cat "$log"
+              exit 0
+            fi
+            kill -0 "$pid" 2> /dev/null || { echo "delta-view exited early"; cat "$log"; exit 1; }
+            sleep 1
+          done
+          echo "no window and data folder after 120s (data folder: ${data:-none})"
+          ls -R "$HOME/snap/delta-view" 2> /dev/null | head -50
+          cat "$log"
+          kill "$pid" 2> /dev/null
+          exit 1
+          SCRIPT
+          xvfb-run -a -s "-screen 0 1280x800x24 -ac" bash "$RUNNER_TEMP/snap-smoke.sh"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: snap-${{ matrix.arch }}
+          path: ${{ steps.build.outputs.snap }}
+          if-no-files-found: error

@@ -1,0 +1,9 @@
+delta-view (1.1.0~noble1) noble; urgency=medium
+
+  * First release in the Dhiva Labs PPA.
+  * DeltaView 1.1.0: copy changes across and resolve three-way merges,
+    synchronize folders with a preview of every step, and compare zip and
+    tar archives, SFTP servers, images and JSON, YAML and CSV. See
+    CHANGELOG.md for the full list.
+
+ -- Dhiva Labs <dhivakar1010@gmail.com>  Wed, 21 Oct 2026 15:30:00 +0530

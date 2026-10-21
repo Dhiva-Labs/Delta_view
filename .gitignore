@@ -43,3 +43,6 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Vendored build inputs for the PPA source package (see packaging/vendor/README).
+/packaging/vendor/*.tar.xz
