@@ -3,6 +3,7 @@ import 'package:delta_view/cli/user_paths.dart';
 import 'package:delta_view/compare/comparison.dart';
 import 'package:delta_view/ui/brand/app_info.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 
 /// A file system described by a map, so parsing never touches disk.
 class FakeProbe extends PathProbe {
@@ -15,7 +16,7 @@ class FakeProbe extends PathProbe {
 
   @override
   String resolve(String path) =>
-      expandUserPath(path, home: '/home/u', cwd: '/work');
+      expandUserPath(path, home: '/home/u', cwd: '/work', style: p.posix);
 }
 
 void main() {
@@ -174,17 +175,28 @@ void main() {
   });
 
   group('expandUserPath', () {
+    String posix(String input) =>
+        expandUserPath(input, home: '/h', cwd: '/c', style: p.posix);
+
     test('expands ~ and makes paths absolute', () {
-      expect(expandUserPath('~', home: '/h', cwd: '/c'), '/h');
-      expect(expandUserPath('~/x', home: '/h', cwd: '/c'), '/h/x');
-      expect(expandUserPath('x/../y', home: '/h', cwd: '/c'), '/c/y');
-      expect(expandUserPath('  /abs/ ', home: '/h', cwd: '/c'), '/abs');
-      expect(expandUserPath('', home: '/h', cwd: '/c'), '');
+      expect(posix('~'), '/h');
+      expect(posix('~/x'), '/h/x');
+      expect(posix('x/../y'), '/c/y');
+      expect(posix('  /abs/ '), '/abs');
+      expect(posix(''), '');
     });
 
     test('accepts file URIs pasted from a file manager', () {
-      expect(expandUserPath('file:///tmp/a%20b', home: '/h', cwd: '/c'),
-          '/tmp/a b');
+      expect(posix('file:///tmp/a%20b'), '/tmp/a b');
+    });
+
+    test('reads Windows paths the Windows way', () {
+      String windows(String input) => expandUserPath(input,
+          home: r'C:\Users\u', cwd: r'C:\work', style: p.windows);
+      expect(windows(r'~\notes.txt'), r'C:\Users\u\notes.txt');
+      expect(windows('rel.txt'), r'C:\work\rel.txt');
+      expect(windows(r'D:\x\..\y'), r'D:\y');
+      expect(windows('file:///C:/tmp/a%20b'), r'C:\tmp\a b');
     });
   });
 

@@ -126,9 +126,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('1 conflict is not resolved'), findsOneWidget);
     await tester.tap(find.text('Save with markers'));
+    // Wait for the save itself to finish, not just for the bytes to show:
+    // until the file is closed, Windows will not let tearDown delete it.
     await pumpUntil(
       tester,
-      () => File(path('out.txt')).readAsStringSync().startsWith('one'),
+      () => find.textContaining('Saved the merge to').evaluate().isNotEmpty,
     );
     expect(
       File(path('out.txt')).readAsStringSync(),

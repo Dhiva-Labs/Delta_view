@@ -9,23 +9,27 @@ import 'package:path/path.dart' as p;
 enum PathKind { directory, file, missing }
 
 /// Expands a leading `~` and makes [input] absolute against [cwd]. Returns
-/// the empty string for blank input. [home] and [cwd] default to the real
-/// ones; tests pass their own.
-String expandUserPath(String input, {String? home, String? cwd}) {
+/// the empty string for blank input. [home], [cwd] and the path [style]
+/// default to this machine's; tests pass their own so they read the same
+/// on every platform.
+String expandUserPath(String input,
+    {String? home, String? cwd, p.Context? style}) {
+  final paths = style ?? p.context;
   var path = input.trim();
   if (path.isEmpty) return '';
   // A pasted file URI (from a file manager) is a path too.
   if (path.startsWith('file://')) {
-    path = Uri.parse(path).toFilePath();
+    path = Uri.parse(path)
+        .toFilePath(windows: paths.style == p.Style.windows);
   }
   if (path == '~' || path.startsWith('~/') || path.startsWith(r'~\')) {
     final h = home ?? userHomeDirectory();
     if (h != null) path = h + path.substring(1);
   }
-  if (!p.isAbsolute(path)) {
-    path = p.join(cwd ?? Directory.current.path, path);
+  if (!paths.isAbsolute(path)) {
+    path = paths.join(cwd ?? Directory.current.path, path);
   }
-  return p.normalize(path);
+  return paths.normalize(path);
 }
 
 String? userHomeDirectory() {
