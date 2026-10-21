@@ -53,10 +53,11 @@ jobs:
           unsquashfs -q -d "$RUNNER_TEMP/snap" "$SNAP_FILE" meta/snap.yaml meta/gui delta_view
           grep -qx -- '- ${{ matrix.arch }}' "$RUNNER_TEMP/snap/meta/snap.yaml"
           file "$RUNNER_TEMP/snap/delta_view" | tee /dev/stderr | grep -q "$ELF_MACHINE"
-          # The launcher must keep the app id's name, and its icon must
-          # resolve inside the snap.
-          cat "$RUNNER_TEMP/snap/meta/gui/com.dhivalabs.delta_view.desktop"
-          grep -q '^Icon=\${SNAP}/' "$RUNNER_TEMP/snap/meta/gui/com.dhivalabs.delta_view.desktop"
+          # snapcraft stores the launcher as meta/gui/<app>.desktop (GNOME
+          # matches a snap's window to it through the snap, not the app id).
+          # Its icon must resolve inside the snap.
+          cat "$RUNNER_TEMP/snap/meta/gui/delta-view.desktop"
+          grep -q '^Icon=\${SNAP}/' "$RUNNER_TEMP/snap/meta/gui/delta-view.desktop"
 
       # A strictly confined bundle can look right and still fail to start
       # (a missing library, a denied access), so install the snap and run it.
