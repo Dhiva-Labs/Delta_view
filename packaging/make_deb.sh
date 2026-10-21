@@ -63,23 +63,12 @@ cp "$ROOT/LICENSE" "$PKG/usr/share/doc/$PKGNAME/copyright"
 mkdir -p "$PKG/opt/delta_view/extras"
 cp "$ROOT/packaging/extras/"* "$PKG/opt/delta_view/extras/"
 
-# %F lets file managers pass the selected items (two folders, two files, or
-# three files for a merge). The MIME types make DeltaView appear in
-# "Open with" for folders and text files.
-cat > "$PKG/usr/share/applications/$PKGNAME.desktop" <<DESKTOP
-[Desktop Entry]
-Type=Application
-Name=DeltaView
-GenericName=File and folder comparison
-Comment=Compare folders and files, beautifully
-Exec=/opt/delta_view/delta_view %F
-Icon=$PKGNAME
-Terminal=false
-Categories=Development;Utility;FileTools;
-MimeType=inode/directory;text/plain;
-Keywords=diff;compare;merge;folders;files;
-StartupWMClass=delta_view
-DESKTOP
+# The entry is named after the GTK application id: GNOME Shell matches a
+# running Wayland window to its launcher by <app-id>.desktop, and any other
+# name leaves the window with a generic icon in the dock. The same file is
+# used by the PPA (debian/rules) and the snap.
+install -m 0644 "$ROOT/linux/com.dhivalabs.delta_view.desktop" \
+   "$PKG/usr/share/applications/com.dhivalabs.delta_view.desktop"
 
 cat > "$PKG/DEBIAN/control" <<CONTROL
 Package: $PKGNAME
@@ -89,10 +78,14 @@ Priority: optional
 Architecture: $ARCH
 Depends: libgtk-3-0, libglib2.0-0
 Maintainer: dhivadhiva <dhivakar1010@gmail.com>
-Description: Meld-style folder and file comparison tool
- DeltaView compares folders and files side by side with a Myers-diff
- engine, tabbed multi-comparison workflow, dual-pane tree view, and an
- in-place editor with live re-highlighting and save.
+Description: Compare and merge folders and files, Meld-style
+ DeltaView compares folders and files side by side and merges the
+ differences: copy changes across, resolve three-way merges, and
+ synchronize folders with a preview of every step.
+ .
+ It compares local folders, zip and tar archives and SFTP servers, shows
+ images and JSON, YAML and CSV by their structure, and works as git
+ difftool and mergetool.
 CONTROL
 
 # Refresh the icon and desktop caches so the entry and icon show up

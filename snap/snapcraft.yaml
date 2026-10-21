@@ -1,0 +1,87 @@
+# Snap Store packaging for DeltaView. Built separately from the debian/
+# (Launchpad PPA) packaging; see packaging/SNAP.md for building and
+# publishing.
+#
+# The `flutter` plugin (craft-parts) clones the Flutter SDK and runs
+# `flutter build linux --release` itself. The `gnome` extension supplies
+# GTK, the desktop-launch wrapper, fonts, themes and the desktop plugs.
+name: delta-view
+title: DeltaView
+base: core22
+version: '1.1.0'
+summary: Compare and merge folders and files, Meld-style
+description: |
+  DeltaView compares folders and files side by side and merges the
+  differences: copy changes across, resolve three-way merges, and
+  synchronize folders with a preview of every step.
+
+  It compares local folders, zip and tar archives and SFTP servers, shows
+  images (side by side, swipe, onion skin, pixel difference) and JSON, YAML
+  and CSV by their structure, and works as git difftool and mergetool.
+
+  Long lines wrap or scroll, unchanged runs fold away, syntax is
+  highlighted, and files keep their encoding and line endings when saved.
+  Themes, colour-blind-safe diff colours, fonts and every shortcut can be
+  changed in Settings.
+
+  Strict confinement: DeltaView can open files in your home folder and on
+  removable media, and connects to the SFTP servers you choose.
+grade: stable
+confinement: strict
+icon: assets/brand/delta_view_512.png
+license: MIT
+website: https://github.com/Dhiva-Labs/Delta_view
+source-code: https://github.com/Dhiva-Labs/Delta_view
+issues: https://github.com/Dhiva-Labs/Delta_view/issues
+contact: dhivakar1010@gmail.com
+
+# Built natively on each architecture: the Flutter plugin cannot
+# cross-compile.
+architectures:
+  - build-on: amd64
+  - build-on: arm64
+
+apps:
+  delta-view:
+    command: delta_view
+    extensions:
+      - gnome
+    desktop: usr/share/applications/com.dhivalabs.delta_view.desktop
+    plugs:
+      - home
+      - removable-media
+      # SFTP connections.
+      - network
+
+parts:
+  delta-view:
+    plugin: flutter
+    source: .
+    flutter-target: lib/main.dart
+    # `source: .` copies the working tree as it is. A build/ folder from a
+    # host-side `flutter build linux` carries a CMakeCache.txt naming host
+    # paths, which CMake refuses to reuse, so local build state is dropped;
+    # it is all regenerated inside the build environment.
+    override-pull: |
+      craftctl default
+      rm -rf build .dart_tool .flutter .pub-cache debian/.home \
+        linux/flutter/ephemeral packaging/vendor/*.tar.xz .claude design dist
+    stage-packages:
+      - libgtk-3-0
+
+  desktop-assets:
+    # The same desktop entry and icons the .deb and the PPA package install.
+    # The entry is named after the GTK application id so GNOME Shell matches
+    # the running window to it and shows DeltaView's icon.
+    plugin: dump
+    source: .
+    organize:
+      linux/com.dhivalabs.delta_view.desktop: usr/share/applications/com.dhivalabs.delta_view.desktop
+      assets/brand/delta_view_256.png: usr/share/icons/hicolor/256x256/apps/delta-view.png
+      assets/brand/delta_view_512.png: usr/share/icons/hicolor/512x512/apps/delta-view.png
+      assets/brand/delta_view.svg: usr/share/icons/hicolor/scalable/apps/delta-view.svg
+    stage:
+      - usr/share/applications/com.dhivalabs.delta_view.desktop
+      - usr/share/icons/hicolor/256x256/apps/delta-view.png
+      - usr/share/icons/hicolor/512x512/apps/delta-view.png
+      - usr/share/icons/hicolor/scalable/apps/delta-view.svg

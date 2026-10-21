@@ -1,0 +1,167 @@
+#!/usr/bin/make -f
+
+include /usr/share/dpkg/architecture.mk
+
+# Launchpad's PPA build farm has no outbound network access, so the Flutter
+# SDK and pub cache are vendored under packaging/vendor/ and extracted into
+# build-scoped directories here. See packaging/vendor/README for how the
+# tarballs are produced.
+FLUTTER_VERSION := 3.44.6
+FLUTTER_ENGINE_VERSION := 83675ed27633283e7fc296c8bca22e841224c096
+
+# Flutter names the build folder after the CPU: x64 or arm64. The vendored SDK
+# below only carries the x64 engine, so the package is still amd64-only (see
+# Architecture: in debian/control); arm64 needs an arm64 SDK tarball first.
+ifeq ($(DEB_HOST_ARCH),arm64)
+FLUTTER_ARCH := arm64
+else
+FLUTTER_ARCH := x64
+endif
+
+FLUTTER_ROOT := $(CURDIR)/.flutter
+FLUTTER_TARBALL := $(CURDIR)/packaging/vendor/flutter-$(FLUTTER_VERSION)-linux-slim.tar.xz
+PUB_CACHE_TARBALL := $(CURDIR)/packaging/vendor/pub-cache-$(FLUTTER_VERSION).tar.xz
+
+export PATH := $(FLUTTER_ROOT)/bin:$(PATH)
+export HOME := $(CURDIR)/debian/.home
+export PUB_CACHE := $(CURDIR)/.pub-cache
+# Tell the flutter tool which engine artifacts it already has, so it doesn't
+# try to derive the version from a real git history (there isn't one — the
+# vendored SDK ships a minimal .git shim instead).
+export FLUTTER_PREBUILT_ENGINE_VERSION := $(FLUTTER_ENGINE_VERSION)
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	mkdir -p $(HOME)
+	if [ ! -x "$(FLUTTER_ROOT)/bin/flutter" ]; then \
+		rm -rf $(CURDIR)/flutter $(FLUTTER_ROOT); \
+		tar --no-same-owner -xJf $(FLUTTER_TARBALL) -C $(CURDIR); \
+		mv $(CURDIR)/flutter $(FLUTTER_ROOT); \
+	fi
+	if [ ! -d "$(PUB_CACHE)/hosted" ]; then \
+		mkdir -p $(PUB_CACHE); \
+		tar --no-same-owner -xJf $(PUB_CACHE_TARBALL) -C $(PUB_CACHE); \
+	fi
+	$(FLUTTER_ROOT)/bin/flutter --disable-analytics config --no-analytics --no-cli-animations
+	# Belt-and-braces to keep pub genuinely offline. All three exist
+	# because the ~noble2 build failed with "Got socket error trying to
+	# find package test at https://pub.dev." under --offline — meaning
+	# pub decided to re-resolve rather than trust pubspec.lock, and its
+	# offline-fallback fell through to a network call anyway.
+	#
+	# 1) Touch the lockfile: dpkg-source preserves mtimes, so a version
+	#    bump can leave pubspec.yaml newer than pubspec.lock and trigger
+	#    a "lockfile stale" re-resolution.
+	# 2) Strip `resolution: workspace` from every vendored pubspec: ten
+	#    of our transitive deps (test_api, meta, ffi, win32...) declare
+	#    it and it makes pub pull those packages' dev_dependencies
+	#    (`test: any`, `test_core: any`) as if they were monorepo
+	#    members. Those packages are not vendored, so pub tries to
+	#    fetch them.
+	# 3) Use `flutter pub get --offline` (NOT `dart pub get`): the
+	#    dart CLI doesn't set up FLUTTER_ROOT the way the flutter
+	#    wrapper does, so `dart pub get` can't resolve the
+	#    `flutter_test` dev dep (comes from `sdk: flutter`, not
+	#    pub.dev). ~noble4 tried `dart pub get --enforce-lockfile`
+	#    and hit "the Flutter SDK is not available." `flutter pub
+	#    get --offline` succeeded in ~noble3 for the app's resolution
+	#    step; only the build step failed, and that was because
+	#    resolution: workspace wasn't stripped from .flutter/packages.
+	#    With the strip covering both cache and SDK packages,
+	#    `flutter pub get --offline` is the right knob.
+	# The vendored SDK ships flutter_tools/.dart_tool/package_config.json
+	# generated on the machine that produced the tarball, with absolute
+	# rootUris into that machine's scratch pub cache. flutter_tools'
+	# PubDependencies.isUpToDate (flutter_cache.dart) walks this file and
+	# checks each rootUri contains a pubspec.yaml; when the paths do not
+	# exist — every machine except the one that built the tarball — the
+	# artifact reads as stale and the tool re-resolves its OWN package
+	# online (`dart pub get --directory .flutter/packages/flutter_tools`),
+	# which wants flutter_tools' dev deps (`test`) and dies on the
+	# builders' blocked network. This was the true cause of the ~noble2,
+	# ~noble3 and ~noble5 failures; it never reproduced locally because
+	# the original scratch directory still existed here. Point every
+	# rootUri at flutter_tools itself (the check validates only that a
+	# pubspec.yaml exists at the path); the tool executes from its AOT
+	# snapshot and does not re-resolve from this file.
+	# Each rootUri must be DISTINCT and parse-valid: the Dart VM loads
+	# this file during the build and rejects duplicate package roots, so
+	# a single shared target is not an option (caught in the pristine
+	# rehearsal, not on the builders). Give every entry its own stub
+	# directory carrying a real pubspec.yaml.
+	python3 -c 'import json,os; \
+		p=".flutter/packages/flutter_tools/.dart_tool/package_config.json"; \
+		d=json.load(open(p)); base=os.path.dirname(p); \
+		stubs=os.path.join(base,"pubstubs"); \
+		[e.update(rootUri="pubstubs/"+e["name"]) or \
+		 os.makedirs(os.path.join(stubs,e["name"],"lib"),exist_ok=True) or \
+		 open(os.path.join(stubs,e["name"],"pubspec.yaml"),"w") \
+		   .write("name: "+e["name"]+chr(10)) \
+		 for e in d["packages"]]; \
+		json.dump(d,open(p,"w"),indent=2)'
+	touch pubspec.lock
+	# Strip `resolution: workspace` from BOTH the vendored pub cache
+	# AND the vendored Flutter SDK's own package pubspecs. flutter_
+	# test, flutter_localizations and integration_test all declare it,
+	# and our app depends on flutter_test as a dev dep — so both the
+	# `flutter pub get` step and the later `flutter build linux` step
+	# walk into workspace expansion without this.
+	# The sed MUST NOT advance each pubspec.yaml's mtime: the flutter
+	# wrapper rebuilds its own tool (via an online `pub upgrade`) when
+	# flutter_tools/pubspec.yaml is newer than its pubspec.lock — that
+	# was failure mode number four, caught in a local network-isolated
+	# rehearsal before it wasted another Launchpad cycle. touch -r
+	# against a stamp file restores the original mtime after editing.
+	find $(PUB_CACHE) $(FLUTTER_ROOT)/packages -name pubspec.yaml \
+		-exec sh -c 'for f; do \
+			touch -r "$$f" "$$f.mtime-stamp"; \
+			sed -i "/^resolution: workspace/d" "$$f"; \
+			touch -r "$$f.mtime-stamp" "$$f"; \
+			rm -f "$$f.mtime-stamp"; \
+		done' - {} +
+	$(FLUTTER_ROOT)/bin/flutter pub get --offline
+	$(FLUTTER_ROOT)/bin/flutter build linux --release --no-pub
+
+override_dh_auto_test:
+	# The Dart/Flutter test suite needs a Flutter engine and a display; it
+	# runs in CI, not at package build time.
+
+override_dh_dwz:
+	# The Flutter Linux shared libraries and the AOT-compiled application
+	# binary don't ship .debug_info in the form dwz expects, so
+	# dh_dwz fails outright. Skip DWARF compression for this package.
+
+override_dh_strip:
+	# libflutter_linux_gtk.so and the Flutter engine artifacts ship the
+	# exact binaries Google/Flutter tested against — stripping them here
+	# would produce a different .so than every other Flutter Linux
+	# installation and defeat symbol-based crash reporting. Skip strip.
+
+override_dh_auto_install:
+	# Same layout as packaging/make_deb.sh, so this package and the .deb on
+	# GitHub releases replace each other cleanly.
+	mkdir -p debian/delta-view/opt/delta_view
+	cp -a build/linux/$(FLUTTER_ARCH)/release/bundle/. debian/delta-view/opt/delta_view/
+	mkdir -p debian/delta-view/usr/bin
+	ln -s /opt/delta_view/delta_view debian/delta-view/usr/bin/delta-view
+	# Named after the GTK application id so GNOME Shell matches the running
+	# Wayland window to this launcher and shows DeltaView's icon.
+	install -D -m 0644 linux/com.dhivalabs.delta_view.desktop \
+		debian/delta-view/usr/share/applications/com.dhivalabs.delta_view.desktop
+	for size in 16 24 32 48 64 128 256 512; do \
+		install -D -m 0644 assets/brand/delta_view_$${size}.png \
+			debian/delta-view/usr/share/icons/hicolor/$${size}x$${size}/apps/delta-view.png; \
+	done
+	install -D -m 0644 assets/brand/delta_view.svg \
+		debian/delta-view/usr/share/icons/hicolor/scalable/apps/delta-view.svg
+	# The file manager script (see docs/command-line.md).
+	install -D -m 0755 packaging/extras/compare-with-deltaview \
+		debian/delta-view/opt/delta_view/extras/compare-with-deltaview
+	install -D -m 0644 packaging/extras/README \
+		debian/delta-view/opt/delta_view/extras/README
+
+override_dh_auto_clean:
+	dh_auto_clean
+	rm -rf .flutter .pub-cache build .dart_tool debian/.home

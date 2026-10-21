@@ -9,6 +9,10 @@ The executable is `delta-view` on Linux when installed from the `.deb`
 default; adjust if you chose another folder). Examples below say
 `delta-view`; on Windows use the full path or add that folder to `PATH`.
 
+Installed from the Microsoft Store, DeltaView brings its own `delta-view`
+command (an app execution alias), so the examples work as written in Command
+Prompt, PowerShell and Windows Terminal.
+
 ## Usage
 
 ```
@@ -90,12 +94,10 @@ not you saved). `keepBackup false` stops git leaving `*.orig` files behind.
 
 ## Compare from the file manager
 
-The `.deb` installs a desktop entry that accepts folders and files, so in
-GNOME Files you can select two folders (or two files), right-click and
-choose *Open With → DeltaView*.
-
-For a one-click menu entry, the package ships a script under
-`/opt/delta_view/extras/`:
+DeltaView does not register itself to open folders or text files: on some
+desktops that would make it the default program for every folder you open.
+Instead, the `.deb` ships a script under `/opt/delta_view/extras/` that adds a
+one-click menu entry:
 
 ```sh
 mkdir -p ~/.local/share/nautilus/scripts
@@ -123,6 +125,6 @@ that is not installed under `/opt`.
 ## Building the package
 
 `packaging/make_deb.sh` produces the `.deb` from a release build; see the
-README. The desktop entry it writes uses `Exec=/opt/delta_view/delta_view %F`
-and declares `inode/directory` and `text/plain`, which is what makes the
-*Open With* route above work.
+README. It installs `linux/com.dhivalabs.delta_view.desktop`, named after the
+app's GTK application id so GNOME shows DeltaView's own icon for its window.
+The PPA package and the snap use the same entry.
