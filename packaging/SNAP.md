@@ -36,6 +36,16 @@ Bump `version:` in `snap/snapcraft.yaml`, then:
 snapcraft upload --release=stable ./delta-view_<version>_amd64.snap
 ```
 
+An upload does not touch the store listing. The first time, and whenever the
+icon, summary or description change, push them from the snap:
+
+```bash
+snapcraft upload-metadata ./delta-view_<version>_amd64.snap
+```
+
+Without it the Snap Store shows no logo for the snap. Screenshots, the banner
+and the website links are set on <https://snapcraft.io/delta-view/listing>.
+
 The `Snap` workflow (`.github/workflows/snap.yml`) builds amd64 and arm64 on
 native runners, installs each and runs it confined, and keeps the snaps as the
 `snap-amd64` and `snap-arm64` artifacts. Nothing is published from CI. Upload
