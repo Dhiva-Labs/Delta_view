@@ -311,9 +311,186 @@ jobs:
           path: dist/*.exe
           if-no-files-found: error
 
+      # Microsoft Store package (packaging/windows/msix, docs/WINDOWS-STORE.md):
+      # unsigned, with the Partner Center identity; the Store signs it.
+      # Windows PowerShell for these steps, for its Appx and PKI modules.
+      - name: Pack the Store package (.msix)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & .\packaging\windows\msix\build-msix.ps1 -Arch $env:ARCH
+          Get-ChildItem dist\*.msix | Format-Table Name, Length
+
+      - name: Check the Store package is ${{ matrix.arch }}
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . .\packaging\windows\msix\common.ps1
+          $version = Get-AppVersion
+          $msix = (Resolve-Path "dist\DeltaView-$version-$env:ARCH.msix").Path
+          $contents = Join-Path $env:RUNNER_TEMP 'msix-contents'
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [IO.Compression.ZipFile]::ExtractToDirectory($msix, $contents)
+
+          $manifest = [xml](Get-Content -Raw (Join-Path $contents 'AppxManifest.xml'))
+          $id = $manifest.Package.Identity
+          "identity: Name=$($id.Name) Publisher=$($id.Publisher) Version=$($id.Version) ProcessorArchitecture=$($id.ProcessorArchitecture)"
+          if ($id.ProcessorArchitecture -ne $env:ARCH) { throw "ProcessorArchitecture is $($id.ProcessorArchitecture)" }
+          if ($id.Version -ne "$version.0") { throw "Version is $($id.Version), expected $version.0" }
+          $alias = $manifest.Package.Applications.Application.Extensions.Extension.AppExecutionAlias.ExecutionAlias.Alias
+          if ($alias -ne 'delta-view.exe') { throw "execution alias is '$alias', expected delta-view.exe" }
+
+          $required = 'AppxManifest.xml', 'resources.pri', 'delta_view.exe', 'flutter_windows.dll', 'data\app.so',
+            'vcruntime140.dll', 'msvcp140.dll',
+            'Assets\StoreLogo.scale-100.png', 'Assets\Square44x44Logo.targetsize-24_altform-unplated.png'
+          foreach ($f in $required) {
+            if (-not (Test-Path -LiteralPath (Join-Path $contents $f))) { throw "$f is missing from the package" }
+          }
+          $expected = $PeMachines[$env:ARCH]
+          $files = @(Get-ChildItem $contents -Recurse -File -Include *.exe, *.dll)
+          foreach ($f in $files) {
+            $m = Get-PeMachine $f.FullName
+            '{0,-44} 0x{1:X4}' -f $f.Name, $m
+            if ($m -ne $expected) { throw ('{0} is machine 0x{1:X4}, expected {2}' -f $f.Name, $m, $env:PE_MACHINE) }
+          }
+          "checked $($files.Count) PE files"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: msix-${{ matrix.arch }}
+          path: dist/*.msix
+          if-no-files-found: error
+
+      # The same package with a test identity, signed with a throwaway
+      # certificate that only this runner trusts, and installed the way the
+      # Store installs it. The next steps start it and remove it.
+      - name: Install a test-signed copy of the Store package
+        id: msix-install
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . .\packaging\windows\msix\common.ps1
+          $name = 'DeltaView.CI'
+          $publisher = 'CN=DeltaView CI'
+          $msix = Join-Path $env:RUNNER_TEMP 'deltaview-ci.msix'
+          & .\packaging\windows\msix\build-msix.ps1 -Name $name -Publisher $publisher -Arch $env:ARCH -Out $msix
+
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject $publisher `
+            -CertStoreLocation Cert:\CurrentUser\My -TextExtension @('2.5.29.19={text}')
+          $password = ConvertTo-SecureString -String 'ci' -Force -AsPlainText
+          $pfx = Join-Path $env:RUNNER_TEMP 'deltaview-ci.pfx'
+          Export-PfxCertificate -Cert $cert -FilePath $pfx -Password $password | Out-Null
+          Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\LocalMachine\TrustedPeople -Password $password | Out-Null
+          $signtool = Find-SdkTool 'signtool.exe'
+          Invoke-Tool 'signtool sign' { & $signtool sign /fd SHA256 /f $pfx /p ci $msix }
+
+          Add-AppxPackage -Path $msix
+          $pkg = Get-AppxPackage -Name $name
+          if (-not $pkg) { throw "$name is not installed after Add-AppxPackage" }
+          "installed $($pkg.PackageFullName) in $($pkg.InstallLocation)"
+          # PackageFullName is Name_Version_Architecture_ResourceId_PublisherId.
+          if ($pkg.PackageFullName -notlike "*_$($env:ARCH)__*") { throw 'installed for another architecture' }
+          [IO.File]::AppendAllText($env:GITHUB_ENV, "MSIX_CI_NAME=$name`nMSIX_CI_LOCATION=$($pkg.InstallLocation)`n")
+
+      # Started the way a terminal starts it: delta-view.exe with two folders.
+      # The runner has the Visual C++ Redistributable installed, so this also
+      # checks that the app loads the runtime from its package. (pwsh: native
+      # on both runners, so it can list the modules of the arm64 app.)
+      - name: Start the installed Store package through delta-view.exe
+        timeout-minutes: 5
+        run: |
+          "pwsh is $env:PROCESSOR_ARCHITECTURE; package in $env:MSIX_CI_LOCATION"
+          $alias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\delta-view.exe'
+          if (-not (Test-Path $alias)) { throw "the execution alias $alias is missing" }
+          $left = New-Item -ItemType Directory -Force (Join-Path $env:RUNNER_TEMP 'alias-left')
+          $right = New-Item -ItemType Directory -Force (Join-Path $env:RUNNER_TEMP 'alias-right')
+          Set-Content (Join-Path $left.FullName 'a.txt') 'left'
+          Set-Content (Join-Path $right.FullName 'a.txt') 'right'
+          # CreateProcess on the alias, as a terminal does. (Not `& $alias`:
+          # PowerShell cannot see that the alias starts a windowed app, and
+          # may wait for it to exit.)
+          $start = [Diagnostics.ProcessStartInfo]::new($alias)
+          $start.Arguments = '"{0}" "{1}"' -f $left.FullName, $right.FullName
+          $start.UseShellExecute = $false
+          [Diagnostics.Process]::Start($start) | Out-Null
+
+          try {
+            # The Inno Setup copy is uninstalled by now, so delta_view is this one.
+            $proc = $null
+            $seen = $false
+            for ($i = 1; $i -le 90; $i++) {
+              Start-Sleep -Seconds 1
+              $proc = Get-Process -Name delta_view -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($proc) { $seen = $true } elseif ($seen) { throw 'delta_view.exe exited early' }
+              if ($proc -and $proc.MainWindowHandle -ne 0) {
+                "window '$($proc.MainWindowTitle)' is up after ${i}s"
+                break
+              }
+            }
+            if (-not ($proc -and $proc.MainWindowHandle -ne 0)) { throw 'delta_view.exe showed no window within 90 s' }
+            $exe = $proc.MainModule.FileName
+            "running $exe"
+            if ($exe -notlike "$env:MSIX_CI_LOCATION\*") { throw 'delta_view.exe is not the packaged one' }
+
+            $runtime = @($proc.Modules | Where-Object { $_.ModuleName -match '^(vcruntime140(_1)?|msvcp140(_\w+)?)\.dll$' })
+            foreach ($module in $runtime) { '{0,-24} {1}' -f $module.ModuleName, $module.FileName }
+            if (-not ($runtime.ModuleName -contains 'vcruntime140.dll')) { throw 'vcruntime140.dll is not loaded' }
+            $outside = @($runtime | Where-Object { $_.FileName -notlike "$env:MSIX_CI_LOCATION\*" })
+            if ($outside.Count) { throw "C++ runtime loaded from outside the package: $($outside.FileName -join ', ')" }
+
+            Start-Sleep -Seconds 5
+            $proc.Refresh()
+            if ($proc.HasExited) { throw "delta_view.exe died after showing its window (code $($proc.ExitCode))" }
+          } finally {
+            Get-Process -Name delta_view -ErrorAction SilentlyContinue | Stop-Process -Force
+          }
+
+      - name: Remove the installed Store package
+        if: always() && steps.msix-install.outcome == 'success'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-Process -Name delta_view -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          $pkg = Get-AppxPackage -Name $env:MSIX_CI_NAME
+          Remove-AppxPackage -Package $pkg.PackageFullName
+          if (Get-AppxPackage -Name $env:MSIX_CI_NAME) { throw "$env:MSIX_CI_NAME is still installed after Remove-AppxPackage" }
+          "removed $($pkg.PackageFullName)"
+
+  # One .msixbundle with the x64 and arm64 packages: the file to upload to
+  # Partner Center.
+  msix-bundle:
+    name: Windows Store bundle
+    needs: [windows]
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: msix-*
+          path: dist
+          merge-multiple: true
+
+      - name: Bundle the x64 and arm64 packages
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . .\packaging\windows\msix\common.ps1
+          $version = Get-AppVersion
+          Get-ChildItem dist | Format-Table Name, Length
+          & .\packaging\windows\msix\bundle-msix.ps1 -Packages "dist\DeltaView-$version-x64.msix", "dist\DeltaView-$version-arm64.msix"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: msix-bundle
+          path: dist/*.msixbundle
+          if-no-files-found: error
+
   release:
     name: Release assets
-    needs: [linux, windows]
+    needs: [linux, windows, msix-bundle]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -337,6 +514,9 @@ jobs:
           FILES=""
           for arch in amd64 arm64; do FILES="$FILES assets/delta-view_${VERSION}_${arch}.deb"; done
           for arch in x64 arm64; do FILES="$FILES assets/DeltaView-${VERSION}-windows-${arch}-setup.exe"; done
+          # Microsoft Store packages (unsigned; the bundle is what Partner Center takes).
+          for arch in x64 arm64; do FILES="$FILES assets/DeltaView-${VERSION}-${arch}.msix"; done
+          FILES="$FILES assets/DeltaView-${VERSION}.msixbundle"
           ls -l assets
           ls -l $FILES
           echo "files=$FILES" >> "$GITHUB_OUTPUT"
