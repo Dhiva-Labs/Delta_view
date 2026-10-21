@@ -99,6 +99,14 @@ New-Item -ItemType Directory $stage | Out-Null
 try {
     Copy-Item -Recurse (Join-Path $Release '*') $stage
     foreach ($dll in $crt) {
+        # The arm64 runtime folder also holds ARM64X builds (vcruntime140_1.dll)
+        # whose header says x64, for apps with ARM64EC code. Native code for
+        # $Arch never loads them, so only DLLs built for $Arch are packaged.
+        $m = Get-PeMachine $dll.FullName
+        if ($m -ne $expected) {
+            '  - {0,-28} skipped: machine 0x{1:X4}, not {2}' -f $dll.Name, $m, $Arch
+            continue
+        }
         Copy-Item $dll.FullName $stage -Force
         '  + {0,-28} {1}' -f $dll.Name, $dll.VersionInfo.FileVersion
     }
