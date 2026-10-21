@@ -9,6 +9,10 @@ The executable is `delta-view` on Linux when installed from the `.deb`
 default; adjust if you chose another folder). Examples below say
 `delta-view`; on Windows use the full path or add that folder to `PATH`.
 
+Installed from the Microsoft Store, DeltaView brings its own `delta-view`
+command (an app execution alias), so the examples work as written in Command
+Prompt, PowerShell and Windows Terminal.
+
 ## Usage
 
 ```

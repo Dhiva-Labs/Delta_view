@@ -43,6 +43,10 @@ Every release carries the Linux and Windows builds for x64 and arm64:
 sudo apt install ./delta-view_<version>_arm64.deb   # or _amd64.deb
 ```
 
+Releases also carry the Microsoft Store packages, `DeltaView-<version>.msixbundle`
+and the `-x64.msix` / `-arm64.msix` inside it. They are unsigned and meant for
+Partner Center: see [docs/WINDOWS-STORE.md](docs/WINDOWS-STORE.md).
+
 The [Desktop builds](.github/workflows/desktop.yml) workflow builds, tests,
 installs and starts the packages on Linux and Windows, x64 and arm64, on every
 push.
