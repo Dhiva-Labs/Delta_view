@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=DeltaView
+GenericName=File and folder comparison
+Comment=Compare folders and files side by side, and merge changes
+Exec=delta-view %F
+Icon=delta-view
+Terminal=false
+Categories=Utility;FileTools;
+Keywords=diff;compare;merge;folders;files;meld;
+StartupWMClass=com.dhivalabs.delta_view
