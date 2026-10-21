@@ -39,23 +39,45 @@ fi
 
 # ---- staging tree ----
 mkdir -p "$PKG/DEBIAN" "$PKG/usr/bin" "$PKG/opt/delta_view" \
-         "$PKG/usr/share/applications" \
-         "$PKG/usr/share/icons/hicolor/512x512/apps"
+         "$PKG/usr/share/applications"
 
 cp -r "$BUNDLE"/. "$PKG/opt/delta_view/"
-cp "$ROOT/macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_512.png" \
-   "$PKG/usr/share/icons/hicolor/512x512/apps/$PKGNAME.png"
 ln -s /opt/delta_view/delta_view "$PKG/usr/bin/$PKGNAME"
 
+# Icons: every hicolor size from the brand assets, plus the SVG so themes
+# that prefer scalable icons get a crisp one.
+for size in 16 24 32 48 64 128 256 512; do
+  mkdir -p "$PKG/usr/share/icons/hicolor/${size}x${size}/apps"
+  cp "$ROOT/assets/brand/delta_view_${size}.png" \
+     "$PKG/usr/share/icons/hicolor/${size}x${size}/apps/$PKGNAME.png"
+done
+mkdir -p "$PKG/usr/share/icons/hicolor/scalable/apps"
+cp "$ROOT/assets/brand/delta_view.svg" \
+   "$PKG/usr/share/icons/hicolor/scalable/apps/$PKGNAME.svg"
+
+# Extras: the "Compare with DeltaView" file manager script and its notes.
+# Not enabled by default; docs/command-line.md explains how to install it.
+mkdir -p "$PKG/usr/share/doc/$PKGNAME"
+cp "$ROOT/LICENSE" "$PKG/usr/share/doc/$PKGNAME/copyright"
+
+mkdir -p "$PKG/opt/delta_view/extras"
+cp "$ROOT/packaging/extras/"* "$PKG/opt/delta_view/extras/"
+
+# %F lets file managers pass the selected items (two folders, two files, or
+# three files for a merge). The MIME types make DeltaView appear in
+# "Open with" for folders and text files.
 cat > "$PKG/usr/share/applications/$PKGNAME.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
 Name=DeltaView
+GenericName=File and folder comparison
 Comment=Compare folders and files, beautifully
-Exec=/opt/delta_view/delta_view
+Exec=/opt/delta_view/delta_view %F
 Icon=$PKGNAME
 Terminal=false
 Categories=Development;Utility;FileTools;
+MimeType=inode/directory;text/plain;
+Keywords=diff;compare;merge;folders;files;
 StartupWMClass=delta_view
 DESKTOP
 
@@ -73,8 +95,30 @@ Description: Meld-style folder and file comparison tool
  in-place editor with live re-highlighting and save.
 CONTROL
 
+# Refresh the icon and desktop caches so the entry and icon show up
+# without a logout. Each step is optional: a missing tool is not an error.
+for script in postinst postrm; do
+  cat > "$PKG/DEBIAN/$script" <<'MAINT'
+#!/bin/sh
+set -e
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null || true
+fi
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database -q /usr/share/applications 2>/dev/null || true
+fi
+exit 0
+MAINT
+  chmod 0755 "$PKG/DEBIAN/$script"
+done
+
 find "$PKG/opt" "$PKG/usr" -type d -exec chmod 0755 {} \;
+find "$PKG/usr/share/icons" -type f -exec chmod 0644 {} \;
+# Nothing in the package should be writable by group or others.
+chmod 0755 "$PKG"
+find "$PKG/opt" "$PKG/usr" -type f -exec chmod go-w {} +
 chmod 0755 "$PKG/opt/delta_view/delta_view"
+chmod 0755 "$PKG/opt/delta_view/extras/compare-with-deltaview"
 
 mkdir -p "$OUT"
 dpkg-deb --root-owner-group --build "$PKG" "$OUT/${PKGNAME}_${VERSION}_${ARCH}.deb"

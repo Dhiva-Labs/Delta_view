@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# "Compare with DeltaView" for GNOME Files (Nautilus), Nemo and Caja.
+#
+# Install (Nautilus):
+#   mkdir -p ~/.local/share/nautilus/scripts
+#   ln -s /opt/delta_view/extras/compare-with-deltaview \
+#         ~/.local/share/nautilus/scripts/"Compare with DeltaView"
+# Nemo uses ~/.local/share/nemo/scripts and Caja ~/.config/caja/scripts.
+#
+# Then select two folders or two files and choose
+# right-click > Scripts > Compare with DeltaView. Three files open a merge.
+# Selecting a single item remembers it as the left side; running the
+# script on another item later compares the two (Meld's "Select for
+# compare"). See docs/command-line.md in the DeltaView repository.
+set -u
+
+APP="${DELTA_VIEW:-/opt/delta_view/delta_view}"
+if [[ ! -x "$APP" ]]; then
+  APP="$(command -v delta-view || true)"
+fi
+if [[ -z "$APP" ]]; then
+  echo "DeltaView is not installed (looked for /opt/delta_view/delta_view and delta-view on PATH)." >&2
+  exit 1
+fi
+
+REMEMBERED="${XDG_RUNTIME_DIR:-/tmp}/delta-view-select-for-compare"
+
+# Each file manager exports the selection under its own name, one path per
+# line.
+SELECTION="${NAUTILUS_SCRIPT_SELECTED_FILE_PATHS:-${NEMO_SCRIPT_SELECTED_FILE_PATHS:-${CAJA_SCRIPT_SELECTED_FILE_PATHS:-}}}"
+mapfile -t selected < <(printf '%s' "$SELECTION" | sed '/^$/d')
+
+say() {
+  if command -v notify-send >/dev/null 2>&1; then
+    notify-send --app-name=DeltaView "DeltaView" "$1"
+  else
+    echo "$1" >&2
+  fi
+}
+
+case "${#selected[@]}" in
+  2) exec "$APP" "${selected[0]}" "${selected[1]}" ;;
+  3) exec "$APP" --merge "${selected[0]}" "${selected[1]}" "${selected[2]}" ;;
+  1)
+    if [[ -s "$REMEMBERED" ]]; then
+      first="$(cat "$REMEMBERED")"
+      rm -f "$REMEMBERED"
+      if [[ "$first" != "${selected[0]}" ]]; then
+        exec "$APP" "$first" "${selected[0]}"
+      fi
+    fi
+    printf '%s' "${selected[0]}" > "$REMEMBERED"
+    say "Remembered $(basename "${selected[0]}") as the left side. Run the script on the other side to compare."
+    ;;
+  *) say "Select two folders or two files to compare, or three files to merge." ;;
+esac

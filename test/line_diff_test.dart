@@ -92,7 +92,8 @@ void main() {
 
   group('buildSideBySide', () {
     test('pairs replaced lines as modified with intra-line spans', () {
-      final result = buildSideBySide('hello world\nsame\n', 'hello there\nsame\n');
+      final result =
+          buildSideBySide('hello world\nsame\n', 'hello there\nsame\n');
       expect(result.rows, hasLength(2));
       final first = result.rows.first;
       expect(first.kind, DiffRowKind.modified);
@@ -124,6 +125,86 @@ void main() {
       expect(last.rightText, 'c');
       expect(last.rightNumber, 3);
       expect(last.leftNumber, isNull);
+    });
+  });
+
+  group('compare options', () {
+    List<DiffRowKind> kinds(String a, String b, CompareOptions o) =>
+        [for (final r in buildSideBySide(a, b, options: o).rows) r.kind];
+
+    test('the default is exact', () {
+      expect(
+          kinds('a \n', 'a\n', CompareOptions.exact), [DiffRowKind.modified]);
+    });
+
+    test('whitespace modes', () {
+      const trailing = CompareOptions(whitespace: WhitespaceMode.trailing);
+      const changes = CompareOptions(whitespace: WhitespaceMode.changes);
+      const all = CompareOptions(whitespace: WhitespaceMode.all);
+      expect(kinds('a  \n', 'a\n', trailing), [DiffRowKind.same]);
+      expect(kinds(' a\n', 'a\n', trailing), [DiffRowKind.modified]);
+      expect(kinds('  a   b\n', 'a b\n', changes), [DiffRowKind.same]);
+      expect(kinds('ab\n', 'a b\n', changes), [DiffRowKind.modified]);
+      expect(kinds('ab\n', 'a b\n', all), [DiffRowKind.same]);
+    });
+
+    test('compares by key but shows the original text', () {
+      final row = buildSideBySide('Hello\n', 'HELLO\n',
+              options: const CompareOptions(ignoreCase: true))
+          .rows
+          .single;
+      expect(row.kind, DiffRowKind.same);
+      expect(row.leftText, 'Hello');
+      expect(row.rightText, 'HELLO');
+    });
+
+    test('line endings count only when not ignored', () {
+      expect(kinds('a\r\nb\r\n', 'a\nb\n', const CompareOptions()),
+          [DiffRowKind.same, DiffRowKind.same]);
+      expect(
+          kinds('a\r\n', 'a\n', CompareOptions.exact), [DiffRowKind.modified]);
+      // The only difference is the ending: no characters light up.
+      final row = buildSideBySide('a\r\n', 'a\n').rows.single;
+      expect(row.leftSpans, isEmpty);
+      expect(row.rightSpans, isEmpty);
+    });
+
+    test('blank lines drop out but stay visible', () {
+      const o = CompareOptions(ignoreBlankLines: true);
+      final result = buildSideBySide('a\n\nb\n', 'a\nb\n\n\n', options: o);
+      expect(result.changeBlocks, isEmpty);
+      // Every line of both sides is still shown, in order.
+      expect([for (final r in result.rows) r.leftNumber].nonNulls, [1, 2, 3]);
+      expect(
+          [for (final r in result.rows) r.rightNumber].nonNulls, [1, 2, 3, 4]);
+    });
+
+    test('intra-line emphasis skips what the rules ignore', () {
+      const o =
+          CompareOptions(whitespace: WhitespaceMode.changes, ignoreCase: true);
+      final row = buildSideBySide('Foo  bar baz\n', 'foo bar qux\n', options: o)
+          .rows
+          .single;
+      expect(row.kind, DiffRowKind.modified);
+      // Only "baz" → "qux"; the case and the double space do not light up.
+      expect(row.leftSpans, [(9, 12)]);
+      expect(row.rightSpans, [(8, 11)]);
+    });
+
+    test('intra-line emphasis narrows a renamed word', () {
+      final (left, right) = intraLineSpans(
+          'int count = 0;', 'int counter = 0;', CompareOptions.exact);
+      expect(left, isEmpty);
+      expect(right, [(9, 11)]);
+    });
+
+    test('summary names the active rules', () {
+      expect(CompareOptions.exact.summary, 'Exact compare');
+      expect(
+          const CompareOptions(
+                  whitespace: WhitespaceMode.trailing, ignoreCase: true)
+              .summary,
+          'Ignoring trailing whitespace, case, line endings');
     });
   });
 }

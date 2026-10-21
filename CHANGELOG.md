@@ -4,6 +4,61 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-10-21
+
+DeltaView grows from a viewer into a compare-and-merge tool: copy changes
+across, merge three versions, synchronize folders, and compare archives,
+SFTP servers, images and structured data. It has its own icon now.
+
+### Added
+- **Merging.** Copy a change left or right, or delete it, from the bands
+  between the panes; undo and redo cover every step. Three-way merge shows
+  Left | Merged | Right, merges clean changes up front, and resolves each
+  conflict by taking a side, both, the base, or editing by hand.
+- **More to compare.** Folders and files inside zip and tar archives
+  (read-only), and on SFTP servers. A server's host key is shown for you to
+  confirm the first time, and a changed key is refused. Saved connections
+  never store passwords.
+- **Images**: side by side, swipe, onion skin, and a pixel difference with
+  the share of pixels changed. **JSON, YAML and CSV** are compared by
+  structure, so reordered keys or rows are not changes.
+- **Pasted text**: compare two snippets, or the clipboard (Ctrl+Shift+V).
+- **Folder sync**: copy or delete across sides, or mirror a whole tree, with
+  a preview of every step and a confirmation before anything is overwritten
+  or deleted. Reports export as HTML or CSV.
+- **Ignore rules**: patterns from Settings and `.gitignore` files are left
+  out of folder scans; quick compare by size and date for huge trees.
+- **Settings**: theme, accent colour, diff colours (including a
+  colour-blind-safe set), density, editor font and size, word wrap, tab
+  width, whitespace markers, syntax highlighting, compare rules, ignore
+  patterns, and rebindable keyboard shortcuts.
+- **Reading diffs**: horizontal scrolling or word wrap for long lines,
+  hidden unchanged runs, syntax highlighting, find, go to line, a draggable
+  minimap, a status bar, and +/−/~ markers so changes do not rely on colour.
+- **Home screen**: type, paste or drop paths; recent comparisons with
+  pinning; Folders, Files, Text and Merge modes.
+- **Command line**: `delta-view LEFT RIGHT` and
+  `delta-view --merge LOCAL BASE REMOTE --output MERGED`, for use as
+  `git difftool` and `git mergetool` (see docs/command-line.md). The .deb
+  adds a "Compare with DeltaView" file manager script.
+- Window size and open tabs are restored on the next start. Ctrl+/ lists
+  every shortcut; Ctrl+1…9 switch tabs.
+- The Split Delta app icon, and an About dialog.
+
+### Changed
+- Files keep their encoding (UTF-8, UTF-8 with BOM, UTF-16, Latin-1) and line
+  endings when saved; before, every save wrote UTF-8.
+- Folder scans are several times faster, can be cancelled, and stop when
+  their tab closes.
+- The window is titled DeltaView instead of delta_view.
+
+### Fixed
+- Long lines were cut off at the edge of the diff.
+- Closing a tab or quitting threw away unsaved edits without asking.
+- In edit mode the two sides drifted apart while scrolling.
+- Opening the same file twice from a folder comparison opened two tabs.
+- The theme was not remembered between runs.
+
 ## [1.0.1] - 2026-10-16
 
 The version is now the same everywhere. The `0.0.1` release tag carried a
