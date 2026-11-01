@@ -7,21 +7,23 @@ set -euo pipefail
 . /linux-distros/distro.conf
 
 # Display and GL stack for the GUI smoke test, per distribution. xdotool
-# finds the app's window. libEGL is what Flutter's renderer opens at run
-# time (through libepoxy, so it is no ELF dependency); every desktop has it,
-# a container does not. Capabilities and file paths instead of package names
-# where the names differ between Fedora and openSUSE.
+# finds the app's window. libEGL and libGLESv2 are what Flutter's renderer
+# opens at run time (through libepoxy, so they are no ELF dependencies; the
+# rpm requires them by capability, and the AppImage needs them from the
+# host). xvfb-run needs awk, which openSUSE's image lacks. Capabilities and
+# file paths instead of package names where the names differ between Fedora
+# and openSUSE.
 case "$MODE" in
   rpm|appimage)
     dnf -y -q install file findutils which procps-ng \
       xorg-x11-server-Xvfb xorg-x11-xauth mesa-dri-drivers dbus-daemon \
-      'libEGL.so.1()(64bit)' /usr/bin/xdotool
+      'libEGL.so.1()(64bit)' 'libGLESv2.so.2()(64bit)' /usr/bin/xdotool
     ;;
   rpm-suse)
     zypper -n -q --gpg-auto-import-keys refresh
-    zypper -n -q install file findutils which procps \
+    zypper -n -q install file findutils which procps gawk \
       /usr/bin/xvfb-run /usr/bin/xauth /usr/bin/dbus-run-session Mesa-dri \
-      'libEGL.so.1()(64bit)' /usr/bin/xdotool
+      'libEGL.so.1()(64bit)' 'libGLESv2.so.2()(64bit)' /usr/bin/xdotool
     ;;
   pacman)
     pacman -Syu --noconfirm --needed -q file findutils which procps-ng \
