@@ -261,8 +261,8 @@ jobs:
           if-no-files-found: error
 
   # The same installed tree as a Flatpak bundle on the GNOME runtime, built
-  # in Flathub's builder image, then installed and run in its sandbox
-  # (packaging/flatpak/).
+  # in Flathub's builder image (packaging/flatpak/); flatpak-run installs
+  # and runs it.
   flatpak:
     name: Flatpak ${{ matrix.arch }}
     needs: [distros]
@@ -302,9 +302,43 @@ jobs:
           arch: ${{ matrix.fp_arch }}
           cache: false
 
+  # Installs the bundle the way a user does (runtime and its GL extension
+  # from Flathub) on a plain Ubuntu runner and runs it in its sandbox
+  # (packaging/flatpak/smoke.sh). Not in the builder image: GTK gets no GL
+  # context under Xvfb there, so Flutter never draws.
+  flatpak-run:
+    name: Flatpak on Ubuntu ${{ matrix.arch }}
+    needs: [flatpak]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, fp_arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: arm64, fp_arch: aarch64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: flatpak-${{ matrix.arch }}
+          path: bundle
+
+      # A fresh home, as a new user has: the smoke writes to ~ and
+      # ~/.var/app.
+      - name: Install Flatpak and a display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak xvfb xauth dbus-x11
+          mkdir -p "$RUNNER_TEMP/home"
+          echo "HOME=$RUNNER_TEMP/home" >> "$GITHUB_ENV"
+
       - name: Install the bundle and run it in its sandbox
-        timeout-minutes: 10
-        run: packaging/flatpak/smoke.sh delta-view-${{ steps.v.outputs.version }}-${{ matrix.fp_arch }}.flatpak
+        timeout-minutes: 15
+        run: |
+          VERSION="$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)"
+          packaging/flatpak/smoke.sh "bundle/delta-view-$VERSION-${{ matrix.fp_arch }}.flatpak"
 
   windows:
     name: Windows ${{ matrix.arch }}
@@ -639,7 +673,7 @@ jobs:
 
   release:
     name: Release assets
-    needs: [linux, windows, msix-bundle, distros, aur, flatpak]
+    needs: [linux, windows, msix-bundle, distros, aur, flatpak, flatpak-run]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

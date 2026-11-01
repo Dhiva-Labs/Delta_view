@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Installs the Flatpak bundle the way a user does and runs DeltaView in its
-# sandbox. CI runs this in the flatpak-builder container right after the
-# build (the GNOME runtime is already installed there from Flathub).
+# sandbox. CI runs this on a plain Ubuntu runner (the flatpak-run job).
 #
 # usage: smoke.sh <bundle.flatpak>
 #
@@ -13,7 +12,7 @@
 #      --filesystem=/tmp and record the comparison in its settings file
 #      (inside ~/.var/app, written from Dart), and Flutter must draw the
 #      window: counted in Xvfb's framebuffer, where an empty screen has one
-#      colour. The container has no xdotool, so the screen is read directly.
+#      colour. The screen is read directly, without xdotool.
 set -euo pipefail
 APP_ID=com.dhivalabs.delta_view
 [ $# -eq 1 ] || { echo "usage: $0 <bundle.flatpak>" >&2; exit 2; }
@@ -24,19 +23,12 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/runtime-$(id -u)}"
 mkdir -p -m 0700 "$XDG_RUNTIME_DIR"
 
 echo "::group::flatpak install --user $(basename "$bundle")"
+# Flathub first: the bundle's runtime, and the GL extension (Mesa) that
+# Flutter draws with, install from there, as on a user's machine.
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install --user -y --noninteractive "$bundle"
 flatpak info --user "$APP_ID"
 flatpak info --user --show-permissions "$APP_ID"
-# Flutter draws through OpenGL. A user's Flatpak installs the runtime's GL
-# extension (Mesa) from Flathub along with the runtime; the builder image
-# has the runtime without it, and the app then draws nothing ("No GL
-# implementation is available"). Install the branch the runtime asks for.
-runtime="$(flatpak info --user --show-runtime "$APP_ID")"
-gl="$(flatpak info --show-metadata "$runtime" |
-  sed -n '/^\[Extension org.freedesktop.Platform.GL\]/,/^\[/s/^versions=\([^;]*\).*/\1/p')"
-[ -n "$gl" ] || { echo "no GL extension version in $runtime's metadata" >&2; exit 1; }
-flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-flatpak install --user -y --noninteractive flathub "org.freedesktop.Platform.GL.default//$gl"
 echo "::endgroup::"
 
 echo "::group::ldd inside the sandbox"
