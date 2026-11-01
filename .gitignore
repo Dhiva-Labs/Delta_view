@@ -46,3 +46,6 @@ app.*.map.json
 
 # Vendored build inputs for the PPA source package (see packaging/vendor/README).
 /packaging/vendor/*.tar.xz
+
+# Installed tree the Flatpak CI job unpacks (packaging/flatpak/README.md).
+/packaging/flatpak/tree/

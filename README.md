@@ -3,6 +3,7 @@
 [![ARM64 builds](https://github.com/Dhiva-Labs/Delta_view/actions/workflows/desktop.yml/badge.svg?branch=main)](https://github.com/Dhiva-Labs/Delta_view/actions/workflows/desktop.yml)
 ![Linux x64 | arm64](https://img.shields.io/badge/Linux-x64%20%7C%20arm64-informational?logo=linux&logoColor=white)
 ![Windows x64 | arm64](https://img.shields.io/badge/Windows-x64%20%7C%20arm64-informational?logo=windows&logoColor=white)
+![Linux: deb | rpm | Arch | AppImage | Flatpak | Snap](https://img.shields.io/badge/Linux-deb%20%7C%20rpm%20%7C%20Arch%20%7C%20AppImage%20%7C%20Flatpak%20%7C%20Snap-informational?logo=linux&logoColor=white)
 
 A fast, modern folder and file comparison tool — Meld-style, built with
 Flutter for **Windows, Ubuntu, and macOS**.
@@ -43,13 +44,45 @@ Every release carries the Linux and Windows builds for x64 and arm64:
 sudo apt install ./delta-view_<version>_arm64.deb   # or _amd64.deb
 ```
 
+### Other Linux distributions
+
+From the next release on, releases also carry packages for other
+distributions, built from the same binaries as the `.deb` (`x86_64` and
+`aarch64`):
+
+| Distribution | Asset | Install |
+|---|---|---|
+| Fedora, RHEL/Rocky/Alma | `delta-view-<version>-1.<arch>.rpm` | `sudo dnf install ./delta-view-<version>-1.<arch>.rpm` |
+| openSUSE Tumbleweed | `delta-view-<version>-1.<arch>.rpm` | `sudo zypper install --allow-unsigned-rpm ./delta-view-<version>-1.<arch>.rpm` |
+| Arch, Manjaro, EndeavourOS | `delta-view-<version>-1-<arch>.pkg.tar.zst` | `sudo pacman -U ./delta-view-<version>-1-<arch>.pkg.tar.zst` |
+| Any (AppImage) | `DeltaView-<version>-<arch>.AppImage` | `chmod +x DeltaView-<version>-<arch>.AppImage && ./DeltaView-<version>-<arch>.AppImage` |
+| Any (Flatpak) | `delta-view-<version>-<arch>.flatpak` | `flatpak install --user ./delta-view-<version>-<arch>.flatpak` |
+
+- The binaries are built on Ubuntu 24.04, so they need glibc 2.39 or newer:
+  Fedora 40+, openSUSE Tumbleweed and current Arch, but not openSUSE Leap 15
+  or RHEL 9. The AppImage uses the system's GTK 3.
+- The `.rpm` files are unsigned (hence `--allow-unsigned-rpm` on openSUSE).
+- The Flatpak bundle uses the GNOME 51 runtime from Flathub: add the Flathub
+  remote first (`flatpak remote-add --user --if-not-exists flathub
+  https://dl.flathub.org/repo/flathub.flatpakrepo`). It can read and write
+  your home folder, removable media and `/tmp`, because comparisons are made
+  on paths (typed, from the command line, from the recent list, or the
+  temporary files `git difftool` writes), and it connects to the SFTP
+  servers you choose. From git, use `flatpak run com.dhivalabs.delta_view`
+  where the examples say `delta-view`.
+- Arch users can build `delta-view-bin` from the AUR recipe attached to each
+  release (`delta-view-bin-<version>-aur.tar.gz`: PKGBUILD and .SRCINFO).
+
 Releases also carry the Microsoft Store packages, `DeltaView-<version>.msixbundle`
 and the `-x64.msix` / `-arm64.msix` inside it. They are unsigned and meant for
 Partner Center: see [docs/WINDOWS-STORE.md](docs/WINDOWS-STORE.md).
 
 The [Desktop builds](.github/workflows/desktop.yml) workflow builds, tests,
 installs and starts the packages on Linux and Windows, x64 and arm64, on every
-push.
+push. The `.rpm` is installed and run on Fedora and openSUSE Tumbleweed, the
+Arch package on Arch Linux (x64; arm64 gets a static check, as there is no
+official Arch Linux ARM image), the AppImage on Fedora, and the Flatpak in its
+sandbox.
 
 ## Run
 
