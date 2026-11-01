@@ -3,7 +3,9 @@ name: Desktop builds
 # Linux and Windows, x64 and arm64, built natively on a runner of each
 # architecture. Every leg runs the tests, checks the machine type of every
 # binary in the bundle, builds the .deb / Windows installer, installs it and
-# starts the installed app once.
+# starts the installed app once. The .deb is then repackaged for Fedora,
+# openSUSE, Arch (and the AUR), as an AppImage and as a Flatpak, and each of
+# those is installed and run on its own distribution.
 # A published release gets the packages attached; names that are already on
 # the release (hand-uploaded files) are left alone.
 
@@ -156,6 +158,153 @@ jobs:
           name: linux-${{ matrix.arch }}
           path: dist/*.deb
           if-no-files-found: error
+
+  # Repackages each architecture's .deb for Fedora/RHEL/openSUSE (.rpm),
+  # Arch (.pkg.tar.zst) and any glibc distribution (AppImage), then installs
+  # every one of them on the real distribution and runs it
+  # (packaging/linux-distros/).
+  distros:
+    name: Other distros ${{ matrix.arch }}
+    needs: [linux]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, deb_arch: amd64, runner: ubuntu-24.04 }
+          - { arch: arm64, deb_arch: arm64, runner: ubuntu-24.04-arm }
+    env:
+      NFPM_VERSION: '2.48.0'
+      APPIMAGETOOL_VERSION: '1.9.1'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: linux-${{ matrix.arch }}
+          path: deb
+
+      - name: Install nfpm and appimagetool
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "$(uname -m)" in
+            x86_64) nfpm_arch=x86_64; ai_arch=x86_64 ;;
+            aarch64) nfpm_arch=arm64; ai_arch=aarch64 ;;
+          esac
+          mkdir -p "$RUNNER_TEMP/bin"
+          cd "$RUNNER_TEMP/bin"
+          tarball="nfpm_${NFPM_VERSION}_Linux_${nfpm_arch}.tar.gz"
+          gh release download "v$NFPM_VERSION" -R goreleaser/nfpm -p "$tarball" -p checksums.txt
+          grep " $tarball\$" checksums.txt | sha256sum -c -
+          tar -xzf "$tarball" nfpm
+          gh release download "$APPIMAGETOOL_VERSION" -R AppImage/appimagetool \
+            -p "appimagetool-$ai_arch.AppImage" -O appimagetool
+          chmod +x appimagetool
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Build .rpm, Arch package and AppImage
+        run: |
+          VERSION="$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)"
+          dpkg-deb -x "deb/delta-view_${VERSION}_${{ matrix.deb_arch }}.deb" "$RUNNER_TEMP/root"
+          # TREE_TARBALL: the same cleaned tree for the Flatpak job (tar keeps
+          # modes and symlinks).
+          VERSION="$VERSION" TREE_TARBALL="$RUNNER_TEMP/tree.tar.xz" \
+            packaging/linux-distros/pack.sh "$RUNNER_TEMP/root" ${{ matrix.deb_arch }} dist
+
+      - name: Install and run on Fedora, openSUSE and Arch
+        run: packaging/linux-distros/verify.sh dist ${{ matrix.deb_arch }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: distros-${{ matrix.arch }}
+          path: |
+            dist/*.rpm
+            dist/*.pkg.tar.zst
+            dist/*.AppImage
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tree-${{ matrix.arch }}
+          path: ${{ runner.temp }}/tree.tar.xz
+          if-no-files-found: error
+          retention-days: 3
+
+  # AUR recipe: PKGBUILD + .SRCINFO for delta-view-bin, rendered with this
+  # build's checksums and proven with makepkg on archlinux:latest.
+  aur:
+    name: AUR PKGBUILD
+    needs: [linux]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: 'linux-*'
+          path: debs
+          merge-multiple: true
+
+      - name: Render and check the PKGBUILD
+        run: |
+          VERSION="$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)"
+          VERSION="$VERSION" packaging/arch/aur.sh \
+            "debs/delta-view_${VERSION}_amd64.deb" "debs/delta-view_${VERSION}_arm64.deb" dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: aur
+          path: dist/*-aur.tar.gz
+          if-no-files-found: error
+
+  # The same installed tree as a Flatpak bundle on the GNOME runtime, built
+  # in Flathub's builder image, then installed and run in its sandbox
+  # (packaging/flatpak/).
+  flatpak:
+    name: Flatpak ${{ matrix.arch }}
+    needs: [distros]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: --privileged
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, fp_arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: arm64, fp_arch: aarch64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@v7
+
+      # A path inside the workspace: in a container job, runner.temp names
+      # the host's directory, not the container's.
+      - uses: actions/download-artifact@v8
+        with:
+          name: tree-${{ matrix.arch }}
+          path: flatpak-tree
+
+      - name: Unpack the installed tree
+        id: v
+        run: |
+          mkdir -p packaging/flatpak/tree
+          tar -xJf flatpak-tree/tree.tar.xz -C packaging/flatpak/tree
+          echo "version=$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d+ -f1)" >> "$GITHUB_OUTPUT"
+
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: packaging/flatpak/com.dhivalabs.delta_view.yml
+          bundle: delta-view-${{ steps.v.outputs.version }}-${{ matrix.fp_arch }}.flatpak
+          artifact-name: flatpak-${{ matrix.arch }}
+          arch: ${{ matrix.fp_arch }}
+          cache: false
+
+      - name: Install the bundle and run it in its sandbox
+        timeout-minutes: 10
+        run: packaging/flatpak/smoke.sh delta-view-${{ steps.v.outputs.version }}-${{ matrix.fp_arch }}.flatpak
 
   windows:
     name: Windows ${{ matrix.arch }}
@@ -490,7 +639,7 @@ jobs:
 
   release:
     name: Release assets
-    needs: [linux, windows, msix-bundle]
+    needs: [linux, windows, msix-bundle, distros, aur, flatpak]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -501,11 +650,42 @@ jobs:
           sparse-checkout: pubspec.yaml
           sparse-checkout-cone-mode: false
 
+      # One pattern per kind of package, so the tree-* build intermediates
+      # (one tree.tar.xz per architecture) stay out of assets/.
       - uses: actions/download-artifact@v8
         with:
-          pattern: '*-*'
+          pattern: 'linux-*'
           path: assets
           merge-multiple: true
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: 'windows-*'
+          path: assets
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: 'msix-*'
+          path: assets
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: 'distros-*'
+          path: assets
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: 'flatpak-*'
+          path: assets
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: aur
+          path: assets
 
       - name: Select the release assets
         id: select
@@ -517,6 +697,14 @@ jobs:
           # Microsoft Store packages (unsigned; the bundle is what Partner Center takes).
           for arch in x64 arm64; do FILES="$FILES assets/DeltaView-${VERSION}-${arch}.msix"; done
           FILES="$FILES assets/DeltaView-${VERSION}.msixbundle"
+          # Fedora/openSUSE, Arch, AppImage and Flatpak, and the AUR recipe.
+          for arch in x86_64 aarch64; do
+            FILES="$FILES assets/delta-view-${VERSION}-1.${arch}.rpm"
+            FILES="$FILES assets/delta-view-${VERSION}-1-${arch}.pkg.tar.zst"
+            FILES="$FILES assets/DeltaView-${VERSION}-${arch}.AppImage"
+            FILES="$FILES assets/delta-view-${VERSION}-${arch}.flatpak"
+          done
+          FILES="$FILES assets/delta-view-bin-${VERSION}-aur.tar.gz"
           ls -l assets
           ls -l $FILES
           echo "files=$FILES" >> "$GITHUB_OUTPUT"
