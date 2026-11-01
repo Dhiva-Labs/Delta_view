@@ -10,9 +10,10 @@ set -euo pipefail
 # finds the app's window. libEGL and libGLESv2 are what Flutter's renderer
 # opens at run time (through libepoxy, so they are no ELF dependencies; the
 # rpm requires them by capability, and the AppImage needs them from the
-# host). xvfb-run needs awk, which openSUSE's image lacks. Capabilities and
-# file paths instead of package names where the names differ between Fedora
-# and openSUSE.
+# host). xvfb-run needs awk, which openSUSE's image lacks, and Tumbleweed's
+# dbus-run-session lives in dbus-1-daemon. zypper does not resolve /usr/bin
+# paths as capabilities, so openSUSE gets package names; library
+# capabilities work on both.
 case "$MODE" in
   rpm|appimage)
     dnf -y -q install file findutils which procps-ng \
@@ -22,8 +23,8 @@ case "$MODE" in
   rpm-suse)
     zypper -n -q --gpg-auto-import-keys refresh
     zypper -n -q install file findutils which procps gawk \
-      /usr/bin/xvfb-run /usr/bin/xauth /usr/bin/dbus-run-session Mesa-dri \
-      'libEGL.so.1()(64bit)' 'libGLESv2.so.2()(64bit)' /usr/bin/xdotool
+      xvfb-run xauth dbus-1-daemon Mesa-dri \
+      'libEGL.so.1()(64bit)' 'libGLESv2.so.2()(64bit)' xdotool
     ;;
   pacman)
     pacman -Syu --noconfirm --needed -q file findutils which procps-ng \
