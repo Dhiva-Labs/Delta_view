@@ -27,6 +27,16 @@ echo "::group::flatpak install --user $(basename "$bundle")"
 flatpak install --user -y --noninteractive "$bundle"
 flatpak info --user "$APP_ID"
 flatpak info --user --show-permissions "$APP_ID"
+# Flutter draws through OpenGL. A user's Flatpak installs the runtime's GL
+# extension (Mesa) from Flathub along with the runtime; the builder image
+# has the runtime without it, and the app then draws nothing ("No GL
+# implementation is available"). Install the branch the runtime asks for.
+runtime="$(flatpak info --user --show-runtime "$APP_ID")"
+gl="$(flatpak info --show-metadata "$runtime" |
+  sed -n '/^\[Extension org.freedesktop.Platform.GL\]/,/^\[/s/^versions=\([^;]*\).*/\1/p')"
+[ -n "$gl" ] || { echo "no GL extension version in $runtime's metadata" >&2; exit 1; }
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak install --user -y --noninteractive flathub "org.freedesktop.Platform.GL.default//$gl"
 echo "::endgroup::"
 
 echo "::group::ldd inside the sandbox"
