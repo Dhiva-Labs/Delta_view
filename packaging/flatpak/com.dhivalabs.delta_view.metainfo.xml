@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.dhivalabs.delta_view</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>DeltaView</name>
+  <summary>Compare and merge folders and files, Meld-style</summary>
+  <description>
+    <p>DeltaView compares folders and files side by side and merges the
+    differences: copy changes across, resolve three-way merges, and
+    synchronize folders with a preview of every step.</p>
+    <p>It compares local folders, zip and tar archives and SFTP servers, shows
+    images and JSON, YAML and CSV by their structure, and works as git
+    difftool and mergetool.</p>
+  </description>
+  <launchable type="desktop-id">com.dhivalabs.delta_view.desktop</launchable>
+  <provides>
+    <binary>delta-view</binary>
+  </provides>
+  <url type="homepage">https://github.com/Dhiva-Labs/Delta_view</url>
+  <url type="bugtracker">https://github.com/Dhiva-Labs/Delta_view/issues</url>
+  <developer id="com.dhivalabs">
+    <name>Dhiva Labs</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="1.1.0" date="2026-10-21"/>
+  </releases>
+</component>

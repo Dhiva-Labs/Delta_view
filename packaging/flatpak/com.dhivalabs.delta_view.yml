@@ -1,0 +1,60 @@
+# Flatpak manifest for DeltaView.
+#
+# Like the .rpm, Arch package and AppImage, this repackages the installed
+# tree of the .deb that CI builds (unpacked into packaging/flatpak/tree/ by
+# the workflow), so the Flatpak ships the same binary as every other format
+# instead of a second build inside the sandbox. A Flathub submission needs
+# `tree` swapped for an archive source (release URL + sha256); see README.md
+# in this directory.
+id: com.dhivalabs.delta_view
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
+command: delta-view
+finish-args:
+  # GTK needs a display socket; fallback-x11 covers X11-only desktops.
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  # GPU acceleration for Flutter's renderer.
+  - --device=dri
+  # DeltaView works on paths, not on single picked files: paths typed into
+  # the path fields or given on the command line (git difftool/mergetool),
+  # comparisons reopened from the recent list or the last session, folders
+  # watched for changes, and merges and folder syncs written back in place,
+  # next to ~/.ssh/known_hosts for SFTP. A file chooser portal grant covers
+  # none of that, so the home folder and removable media are shared, as the
+  # snap does with its home and removable-media plugs.
+  - --filesystem=home
+  - --filesystem=/media
+  - --filesystem=/run/media
+  # git difftool writes the old side of every diff (and both trees for
+  # --dir-diff) to $TMPDIR, /tmp unless set, before starting the tool.
+  - --filesystem=/tmp
+  # SFTP connections.
+  - --share=network
+modules:
+  - name: delta-view
+    buildsystem: simple
+    sources:
+      - type: dir
+        path: tree
+        dest: tree
+      - type: file
+        path: com.dhivalabs.delta_view.metainfo.xml
+    build-commands:
+      # The .deb installs the Flutter bundle in /opt/delta_view; Flutter
+      # finds lib/ and data/ next to its executable.
+      - install -d /app/lib /app/bin
+      - cp -a tree/opt/delta_view /app/lib/delta_view
+      - ln -s ../lib/delta_view/delta_view /app/bin/delta-view
+      # The .deb's desktop entry is already named after the app id; Flatpak
+      # only exports icons named after it too.
+      - install -Dm644 tree/usr/share/applications/com.dhivalabs.delta_view.desktop
+        /app/share/applications/com.dhivalabs.delta_view.desktop
+      - desktop-file-edit --set-icon=com.dhivalabs.delta_view /app/share/applications/com.dhivalabs.delta_view.desktop
+      - for size in 16 24 32 48 64 128 256 512; do install -Dm644 tree/usr/share/icons/hicolor/${size}x${size}/apps/delta-view.png
+        /app/share/icons/hicolor/${size}x${size}/apps/com.dhivalabs.delta_view.png; done
+      - install -Dm644 tree/usr/share/icons/hicolor/scalable/apps/delta-view.svg
+        /app/share/icons/hicolor/scalable/apps/com.dhivalabs.delta_view.svg
+      - install -Dm644 com.dhivalabs.delta_view.metainfo.xml /app/share/metainfo/com.dhivalabs.delta_view.metainfo.xml
