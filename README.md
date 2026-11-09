@@ -8,6 +8,8 @@
 A fast, modern folder and file comparison tool — Meld-style, built with
 Flutter for **Windows, Ubuntu, and macOS**.
 
+**Documentation:** step-by-step guides at [learn.dhivalabs.com](https://learn.dhivalabs.com/apps/delta-view/): [install](https://learn.dhivalabs.com/apps/delta-view/install) · [beginner guide](https://learn.dhivalabs.com/apps/delta-view/getting-started) · [troubleshooting](https://learn.dhivalabs.com/apps/delta-view/faq). New to the topic? Try the [Git and version control](https://learn.dhivalabs.com/tracks/git/) learning track.
+
 ## Features
 
 - **Folder compare**: a recursive dual-pane tree, scanned in the background
