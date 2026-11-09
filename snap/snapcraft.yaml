@@ -30,7 +30,9 @@ grade: stable
 confinement: strict
 icon: assets/brand/delta_view_512.png
 license: MIT
-website: https://github.com/Dhiva-Labs/Delta_view
+website:
+  - https://github.com/Dhiva-Labs/Delta_view
+  - https://learn.dhivalabs.com/apps/delta-view/
 source-code: https://github.com/Dhiva-Labs/Delta_view
 issues: https://github.com/Dhiva-Labs/Delta_view/issues
 contact: dhivakar1010@gmail.com
